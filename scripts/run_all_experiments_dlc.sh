@@ -70,6 +70,38 @@ else
   python -m pip install numpy scipy scikit-learn matplotlib networkx pillow gensim tensorflow
 fi
 
+TORCH_VERSION="$(python - <<'PY'
+import torch
+print(torch.__version__.split('+')[0])
+PY
+)"
+CUDA_VERSION="$(python - <<'PY'
+import torch
+print(torch.version.cuda or "cpu")
+PY
+)"
+
+echo "[DLC] torch_version=${TORCH_VERSION}"
+echo "[DLC] torch_cuda_version=${CUDA_VERSION}"
+
+if [ "${TORCH_VERSION#2.4}" != "${TORCH_VERSION}" ]; then
+  if [ "${CUDA_VERSION}" = "12.1" ]; then
+    python -m pip install dgl==2.5.0 -f https://data.dgl.ai/wheels/torch-2.4/cu121/repo.html
+  elif [ "${CUDA_VERSION}" = "12.4" ]; then
+    python -m pip install dgl==2.5.0 -f https://data.dgl.ai/wheels/torch-2.4/cu124/repo.html
+  else
+    echo "[DLC] DGL auto-install is only configured for torch 2.4 with CUDA 12.1 or 12.4."
+    echo "[DLC] Current environment: torch=${TORCH_VERSION}, cuda=${CUDA_VERSION}."
+    echo "[DLC] Please switch to a PyTorch 2.4 image, or skip DGL-based baselines."
+    exit 2
+  fi
+else
+  echo "[DLC] DGL official wheel is not configured for torch=${TORCH_VERSION}."
+  echo "[DLC] Current image is incompatible with this repo's DGL-based baselines."
+  echo "[DLC] Please switch to a PyTorch 2.4 image with CUDA 12.1 or 12.4."
+  exit 2
+fi
+
 python prepare_external_nie_data.py | tee "${LOG_DIR}/prepare_external_nie_data.log"
 
 python run_heco_baseline.py --datasets ACM DBLP Yelp | tee "${LOG_DIR}/run_heco_baseline.log"

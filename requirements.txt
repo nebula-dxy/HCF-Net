@@ -9,6 +9,5 @@ gensim
 joblib
 tqdm
 pyyaml
-dgl
 torch-geometric
 tensorflow
