@@ -29,7 +29,7 @@ def runtime_output_path(method: str, dataset: str) -> Path:
     raise ValueError(method)
 
 
-def run_geni(dataset: str, epochs: int):
+def run_geni(dataset: str, epochs: int, gpu: int):
     tag = f"{dataset.lower()}_geni"
     cmd = [
         str(PYTHON_EXE),
@@ -37,7 +37,7 @@ def run_geni(dataset: str, epochs: int):
         "--dataset", f"CUSTOM_{dataset}_rel",
         "--data_path", prepared_path(dataset),
         "--cross-num", "1",
-        "--gpu", "-1",
+        "--gpu", str(gpu),
         "--epochs", str(epochs),
         "--batch-size", "1024",
         "--num-workers", "0",
@@ -54,7 +54,7 @@ def run_geni(dataset: str, epochs: int):
     run(cmd)
 
 
-def run_rgtn(dataset: str, epochs: int):
+def run_rgtn(dataset: str, epochs: int, gpu: int):
     tag = f"{dataset.lower()}_rgtn"
     cmd = [
         str(PYTHON_EXE),
@@ -62,7 +62,7 @@ def run_rgtn(dataset: str, epochs: int):
         "--dataset", f"CUSTOM_{dataset}_two",
         "--data_path", prepared_path(dataset),
         "--cross-num", "1",
-        "--gpu", "-1",
+        "--gpu", str(gpu),
         "--epochs", str(epochs),
         "--batch-size", "1024",
         "--num-workers", "0",
@@ -81,7 +81,7 @@ def run_rgtn(dataset: str, epochs: int):
     run(cmd)
 
 
-def run_easing(dataset: str, epochs: int):
+def run_easing(dataset: str, epochs: int, gpu: int):
     tag = f"{dataset.lower()}_easing"
     cmd = [
         str(PYTHON_EXE),
@@ -92,7 +92,7 @@ def run_easing(dataset: str, epochs: int):
         "--semantic_data", "placeholder.pk",
         "--structure_data", "placeholder.pk",
         "--cross-num", "1",
-        "--gpu", "-1",
+        "--gpu", str(gpu),
         "--epochs", str(epochs),
         "--train_num", "1.0",
         "--samp_ssl", "5",
@@ -112,17 +112,18 @@ def main() -> None:
     parser.add_argument("--geni-epochs", type=int, default=40)
     parser.add_argument("--rgtn-epochs", type=int, default=40)
     parser.add_argument("--easing-epochs", type=int, default=20)
+    parser.add_argument("--gpu", type=int, default=-1)
     args = parser.parse_args()
 
     for dataset in args.datasets:
         for method in args.methods:
             started_at = time.perf_counter()
             if method == "GENI":
-                run_geni(dataset, args.geni_epochs)
+                run_geni(dataset, args.geni_epochs, args.gpu)
             elif method == "RGTN":
-                run_rgtn(dataset, args.rgtn_epochs)
+                run_rgtn(dataset, args.rgtn_epochs, args.gpu)
             elif method == "EASING":
-                run_easing(dataset, args.easing_epochs)
+                run_easing(dataset, args.easing_epochs, args.gpu)
             else:
                 raise ValueError(f"Unsupported method: {method}")
             out_path = runtime_output_path(method, dataset)

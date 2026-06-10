@@ -303,7 +303,7 @@ def score_embeddings(art: credible.DatasetArtifacts, embeds: np.ndarray) -> np.n
     return base.minmax_scale(0.38 * pagerank + 0.22 * degree + 0.16 * ci + 0.14 * bridge + 0.10 * density)
 
 
-def run_dataset(name: str) -> Dict[str, float]:
+def run_dataset(name: str, force_cpu: bool = False) -> Dict[str, float]:
     started_at = time.perf_counter()
     set_seed()
     cfg = HECO_CFG[name]
@@ -311,7 +311,8 @@ def run_dataset(name: str) -> Dict[str, float]:
     out_dir = RESULT_ROOT / f"CUSTOM_{name}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() and not force_cpu else "cpu")
+    print(f"[HeCo/{name}] device={device}")
     feats = [feat.to(device) for feat in feats]
     mps = [to_torch_sparse(normalize_adj(symmetrize_target(mp)), device) for mp in metapaths]
 
@@ -410,11 +411,12 @@ def run_dataset(name: str) -> Dict[str, float]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run HeCo baseline on prepared ACM/DBLP/Yelp datasets")
     parser.add_argument("--datasets", nargs="+", default=["ACM", "DBLP", "Yelp"])
+    parser.add_argument("--cpu", action="store_true")
     args = parser.parse_args()
 
     summary = {}
     for name in args.datasets:
-        summary[name] = run_dataset(name)
+        summary[name] = run_dataset(name, force_cpu=args.cpu)
 
     out_path = RESULT_ROOT / "summary.json"
     with out_path.open("w", encoding="utf-8") as f:
