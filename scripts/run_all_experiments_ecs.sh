@@ -27,7 +27,11 @@ print("device_count", torch.cuda.device_count())
 PY
 
 python -m pip install --upgrade pip
-python -m pip install numpy scipy scikit-learn matplotlib networkx pillow gensim tensorflow-cpu
+if [ -f "${WORKDIR}/requirements.txt" ]; then
+  python -m pip install -r "${WORKDIR}/requirements.txt"
+else
+  python -m pip install numpy scipy scikit-learn matplotlib networkx pillow gensim tensorflow
+fi
 
 python prepare_external_nie_data.py | tee "${LOG_DIR}/prepare_external_nie_data.log"
 

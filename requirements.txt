@@ -1,0 +1,14 @@
+numpy
+scipy
+scikit-learn
+matplotlib
+networkx
+pillow
+pandas
+gensim
+joblib
+tqdm
+pyyaml
+dgl
+torch-geometric
+tensorflow
