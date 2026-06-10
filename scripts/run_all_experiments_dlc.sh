@@ -4,6 +4,9 @@ set -euo pipefail
 BASE_DIR="${BASE_DIR:-/root/workspace}"
 WORKDIR="${WORKDIR:-/root/workspace/gemini}"
 DATA_DIR="${DATA_DIR:-/mnt/data}"
+ACM_MAT_PATH="${ACM_MAT_PATH:-${DATA_DIR}/ACM.mat}"
+DBLP_MAT_PATH="${DBLP_MAT_PATH:-${DATA_DIR}/DBLP.mat}"
+YELP_MAT_PATH="${YELP_MAT_PATH:-${DATA_DIR}/Yelp.mat}"
 ARCHIVE_PATH="${ARCHIVE_PATH:-/root/workspace/gemini_bundle.zip}"
 
 if [ ! -d "${WORKDIR}" ]; then
@@ -30,13 +33,24 @@ cd "${WORKDIR}"
 
 echo "[DLC] workdir=${WORKDIR}"
 echo "[DLC] data_dir=${DATA_DIR}"
+echo "[DLC] ACM_MAT_PATH=${ACM_MAT_PATH}"
+echo "[DLC] DBLP_MAT_PATH=${DBLP_MAT_PATH}"
+echo "[DLC] YELP_MAT_PATH=${YELP_MAT_PATH}"
 
-for f in ACM.mat DBLP.mat Yelp.mat; do
-  if [ -f "${DATA_DIR}/${f}" ] && [ ! -e "${WORKDIR}/${f}" ]; then
-    ln -s "${DATA_DIR}/${f}" "${WORKDIR}/${f}"
-    echo "[DLC] linked ${f} from ${DATA_DIR}"
-  fi
-done
+if [ -f "${ACM_MAT_PATH}" ]; then
+  ln -sfn "${ACM_MAT_PATH}" "${WORKDIR}/ACM.mat"
+  echo "[DLC] linked ACM.mat"
+fi
+
+if [ -f "${DBLP_MAT_PATH}" ]; then
+  ln -sfn "${DBLP_MAT_PATH}" "${WORKDIR}/DBLP.mat"
+  echo "[DLC] linked DBLP.mat"
+fi
+
+if [ -f "${YELP_MAT_PATH}" ]; then
+  ln -sfn "${YELP_MAT_PATH}" "${WORKDIR}/Yelp.mat"
+  echo "[DLC] linked Yelp.mat"
+fi
 
 python -V | tee "${LOG_DIR}/python_version.log"
 python - <<'PY' | tee "${LOG_DIR}/torch_cuda.log"
@@ -65,5 +79,6 @@ python build_paper_curve_plots.py | tee "${LOG_DIR}/build_paper_curve_plots.log"
 python build_paper_tables.py | tee "${LOG_DIR}/build_paper_tables.log"
 python build_combined_diffusion_panels.py | tee "${LOG_DIR}/build_combined_diffusion_panels.log"
 python scripts/update_degree_discount_adaptive.py | tee "${LOG_DIR}/update_degree_discount_adaptive.log"
+python scripts/summarize_all_runtimes.py | tee "${LOG_DIR}/summarize_all_runtimes.log"
 
 echo "[DLC] all tasks completed"
