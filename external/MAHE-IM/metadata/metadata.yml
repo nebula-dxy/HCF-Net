@@ -1,0 +1,23 @@
+metadata_version: 1
+name: 'MAHE-IM: Multiple Aggregation of Heterogeneous Relation Embedding for Inﬂuence
+  Maximization on Heterogeneous Information Network'
+description: |-
+  Inﬂuence maximization (IM), as an essential problem in social network analysis, can identify a minimum group of the inﬂuential nodes to maximize the spread of information on the network. The majority of IM studies focus on homogeneous networks, whereas in real world, heterogeneous networks become ubiquitous. The existing IM methods based on homogeneous network do not consider a variety of complex heterogeneous relationships and the attribute of diﬀerent types of nodes, which doesn’t accommodate most real scenario. It is of great signiﬁcance to study IM methods based on heterogeneous network, where eﬃcient integrating the complex multiple semantic relationships and structures embedded in the heterogeneous network is the key breakthrough point.
+  In this paper, a novel deep learning algorithm for inﬂuence maximization on heterogeneous based on a multiple aggregation of heterogeneous relation embedding named MAHE-IM is proposed, which can capture the heterogeneous high-order structure and semantic features of heterogeneous information networks. For more comprehensive and systematical evaluation of MAHE-IM, we further extend fourteen state-of-the-art homogeneous and heterogeneous net- work embedding and graph neural network methods for IM problem and propose fourteen novel IM algorithms. Compared with four IM algorithms and our extended fourteen IM algorithms as eighteen baseline algorithms, which can be categorized three types: greedy-based, network embedding-based and GNN-based IM algorithms, the experimental results illustrate that MAHE-IM is signiﬁcantly eﬃcient and eﬀective. MAHE-IM is more practical on heterogeneous networks. In addition, in order to maximize the convenience for users, a webserver (http://mahe-im.com/) MAHE-IM is developed. The users can obtain the IM results by submitting their heterogeneous network to the webserver. The corresponding source code and used data in this paper can also be available at this webserver.
+authors:
+- name: Li Ying
+  affiliations:
+  - name: College of Computer and Science, Jilin University, Changchun, China
+- name: Li Linlin
+  affiliations:
+  - name: College of Computer and Science, Jilin University, Changchun, China
+- name: Liu Yijun
+  affiliations:
+  - name: Institutes of Science and Development, Chinese Academy of Sciences, Beijing,
+      China; School of Public Policy and Management, University of Chinese Academy
+      of Sciences, Beijing, China
+- name: Li Qianqian
+  affiliations:
+  - name: Institutes of Science and Development, Chinese Academy of Sciences, Beijing,
+      China; School of Public Policy and Management, University of Chinese Academy
+      of Sciences, Beijing, China
