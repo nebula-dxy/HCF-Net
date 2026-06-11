@@ -1,0 +1,26 @@
+[
+  {
+    "dataset": "ACM",
+    "target_count": 3025,
+    "num_nodes": 10942,
+    "relation_count": 8,
+    "pt_path": "D:\\Graduate\\code\\gemini\\external_prepared\\ACM\\acm_nie.pt",
+    "mahe_edges": "D:\\Graduate\\code\\gemini\\external_prepared\\ACM\\acm_mahe_edges.txt"
+  },
+  {
+    "dataset": "DBLP",
+    "target_count": 4057,
+    "num_nodes": 26128,
+    "relation_count": 6,
+    "pt_path": "D:\\Graduate\\code\\gemini\\external_prepared\\DBLP\\dblp_nie.pt",
+    "mahe_edges": "D:\\Graduate\\code\\gemini\\external_prepared\\DBLP\\dblp_mahe_edges.txt"
+  },
+  {
+    "dataset": "Yelp",
+    "target_count": 16239,
+    "num_nodes": 31092,
+    "relation_count": 9,
+    "pt_path": "D:\\Graduate\\code\\gemini\\external_prepared\\Yelp\\yelp_nie.pt",
+    "mahe_edges": "D:\\Graduate\\code\\gemini\\external_prepared\\Yelp\\yelp_mahe_edges.txt"
+  }
+]

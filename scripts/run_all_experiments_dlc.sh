@@ -4,6 +4,7 @@ set -euo pipefail
 BASE_DIR="${BASE_DIR:-/root/workspace}"
 WORKDIR="${WORKDIR:-/root/workspace/gemini}"
 DATA_DIR="${DATA_DIR:-/mnt/data}"
+PREPARED_DIR="${PREPARED_DIR:-${DATA_DIR}/external_prepared}"
 ACM_MAT_PATH="${ACM_MAT_PATH:-${DATA_DIR}/ACM.mat}"
 DBLP_MAT_PATH="${DBLP_MAT_PATH:-${DATA_DIR}/DBLP.mat}"
 YELP_MAT_PATH="${YELP_MAT_PATH:-${DATA_DIR}/Yelp.mat}"
@@ -52,6 +53,16 @@ if [ -f "${YELP_MAT_PATH}" ]; then
   echo "[DLC] linked Yelp.mat"
 fi
 
+for spec in ACM:acm_nie.pt DBLP:dblp_nie.pt Yelp:yelp_nie.pt; do
+  dataset="${spec%%:*}"
+  file="${spec##*:}"
+  mkdir -p "${WORKDIR}/external_prepared/${dataset}"
+  if [ -f "${PREPARED_DIR}/${dataset}/${file}" ]; then
+    ln -sfn "${PREPARED_DIR}/${dataset}/${file}" "${WORKDIR}/external_prepared/${dataset}/${file}"
+    echo "[DLC] linked external_prepared/${dataset}/${file}"
+  fi
+done
+
 python -V | tee "${LOG_DIR}/python_version.log"
 python - <<'PY' | tee "${LOG_DIR}/torch_cuda.log"
 import torch
@@ -64,45 +75,14 @@ if torch.cuda.is_available():
 PY
 
 python -m pip install --upgrade pip
-if [ -f "${WORKDIR}/requirements.txt" ]; then
-  python -m pip install -r "${WORKDIR}/requirements.txt"
+python -m pip install numpy scipy scikit-learn matplotlib networkx pillow gensim tensorflow-cpu
+
+if [ ! -f "${WORKDIR}/external_prepared/ACM/acm_nie.pt" ] || [ ! -f "${WORKDIR}/external_prepared/DBLP/dblp_nie.pt" ] || [ ! -f "${WORKDIR}/external_prepared/Yelp/yelp_nie.pt" ]; then
+  echo "[DLC] external_prepared missing, attempting local generation"
+  python prepare_external_nie_data.py | tee "${LOG_DIR}/prepare_external_nie_data.log"
 else
-  python -m pip install numpy scipy scikit-learn matplotlib networkx pillow gensim tensorflow
+  echo "[DLC] using pre-uploaded external_prepared files" | tee "${LOG_DIR}/prepare_external_nie_data.log"
 fi
-
-TORCH_VERSION="$(python - <<'PY'
-import torch
-print(torch.__version__.split('+')[0])
-PY
-)"
-CUDA_VERSION="$(python - <<'PY'
-import torch
-print(torch.version.cuda or "cpu")
-PY
-)"
-
-echo "[DLC] torch_version=${TORCH_VERSION}"
-echo "[DLC] torch_cuda_version=${CUDA_VERSION}"
-
-if [ "${TORCH_VERSION#2.4}" != "${TORCH_VERSION}" ]; then
-  if [ "${CUDA_VERSION}" = "12.1" ]; then
-    python -m pip install dgl==2.5.0 -f https://data.dgl.ai/wheels/torch-2.4/cu121/repo.html
-  elif [ "${CUDA_VERSION}" = "12.4" ]; then
-    python -m pip install dgl==2.5.0 -f https://data.dgl.ai/wheels/torch-2.4/cu124/repo.html
-  else
-    echo "[DLC] DGL auto-install is only configured for torch 2.4 with CUDA 12.1 or 12.4."
-    echo "[DLC] Current environment: torch=${TORCH_VERSION}, cuda=${CUDA_VERSION}."
-    echo "[DLC] Please switch to a PyTorch 2.4 image, or skip DGL-based baselines."
-    exit 2
-  fi
-else
-  echo "[DLC] DGL official wheel is not configured for torch=${TORCH_VERSION}."
-  echo "[DLC] Current image is incompatible with this repo's DGL-based baselines."
-  echo "[DLC] Please switch to a PyTorch 2.4 image with CUDA 12.1 or 12.4."
-  exit 2
-fi
-
-python prepare_external_nie_data.py | tee "${LOG_DIR}/prepare_external_nie_data.log"
 
 python run_heco_baseline.py --datasets ACM DBLP Yelp | tee "${LOG_DIR}/run_heco_baseline.log"
 python run_external_baselines.py --datasets ACM DBLP Yelp --methods GENI RGTN EASING | tee "${LOG_DIR}/run_external_baselines.log"

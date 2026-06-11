@@ -381,6 +381,7 @@ def apply_diffusion_overrides(
         bundle=art.bundle,
         weighted_topo=art.weighted_topo,
         semantic_graph=art.semantic_graph,
+        diffusion_graph=art.diffusion_graph,
         communities=art.communities,
         struct_target=art.struct_target,
         semantic_target=art.semantic_target,
@@ -411,12 +412,19 @@ def available_method_scores(
     runtimes["PageRank"] = clean_float(time.perf_counter() - t0)
 
     t0 = time.perf_counter()
-    dd_order = credible.degree_discount_order(art.bundle.adjacency, prob=float(art.diffusion_cfg["sir_beta"]))
+    dd_order = credible.degree_discount_order(
+        art.bundle.full_adjacency,
+        prob=float(art.diffusion_cfg["sir_beta"]),
+        candidate_nodes=credible.target_candidate_nodes(art.bundle),
+    )
     scores["DegreeDiscount"] = credible.ranking_to_scores(dd_order, target_count)
     runtimes["DegreeDiscount"] = clean_float(time.perf_counter() - t0)
 
     t0 = time.perf_counter()
-    ad_order = credible.adaptive_degree_order(art.bundle.adjacency)
+    ad_order = credible.adaptive_degree_order(
+        art.bundle.full_adjacency,
+        candidate_nodes=credible.target_candidate_nodes(art.bundle),
+    )
     scores["AdaptiveDegree"] = credible.ranking_to_scores(ad_order, target_count)
     runtimes["AdaptiveDegree"] = clean_float(time.perf_counter() - t0)
 

@@ -75,6 +75,7 @@ def clone_art_with_semantic_graph(
         bundle=art.bundle,
         weighted_topo=art.weighted_topo,
         semantic_graph=semantic_graph.tocsr(),
+        diffusion_graph=art.diffusion_graph,
         communities=art.communities,
         struct_target=art.struct_target,
         semantic_target=art.semantic_target,
@@ -172,20 +173,18 @@ def train_variant_scores(
     bundle = art.bundle
     device = credible.get_device(force_cpu=force_cpu)
 
-    x_topo = torch.tensor(bundle.full_features, dtype=torch.float32, device=device)
-    x_sem = torch.tensor(bundle.full_semantic_features, dtype=torch.float32, device=device)
-    node_types = torch.tensor(bundle.node_types, dtype=torch.long, device=device)
-    target_nodes = torch.tensor(bundle.target_nodes, dtype=torch.long, device=device)
-    a_topo = credible.to_torch_sparse(base.sym_norm_sp(art.model_topo_graph), device)
-    a_sem = credible.to_torch_sparse(base.sym_norm_sp(art.model_semantic_graph), device)
+    x = torch.tensor(bundle.features, dtype=torch.float32, device=device)
+    node_types = torch.tensor(bundle.node_types[: bundle.adjacency.shape[0]], dtype=torch.long, device=device)
+    a_topo = credible.to_torch_sparse(base.sym_norm_sp(art.weighted_topo), device)
+    a_sem = credible.to_torch_sparse(base.sym_norm_sp(art.semantic_graph), device)
     y_struct = torch.tensor(art.struct_target, dtype=torch.float32, device=device)
     y_sem = torch.tensor(art.semantic_target, dtype=torch.float32, device=device)
     y_rank = torch.tensor(art.rank_target, dtype=torch.float32, device=device)
 
-    model_nodes = bundle.full_adjacency.shape[0]
+    model_nodes = bundle.adjacency.shape[0]
     hidden_dim = 80 if model_nodes > 10000 else 96
     model = credible.CredibleHCFNet(
-        x_topo.shape[1],
+        x.shape[1],
         hidden_dim=hidden_dim,
         dropout=0.20,
         num_node_types=len(bundle.type_names or []),
@@ -199,27 +198,23 @@ def train_variant_scores(
 
     for epoch in range(epochs):
         model.train()
-        topo_score, sem_score, z_topo, z_sem_raw, z_sem_align = model(x_topo, x_sem, node_types, a_topo, a_sem)
-        topo_target = topo_score[target_nodes]
-        sem_target = sem_score[target_nodes]
-        z_topo_target = z_topo[target_nodes]
-        z_sem_align_target = z_sem_align[target_nodes]
-        fused = topo_target + (0.12 * sem_target if use_semantic_view else 0.0)
+        topo_score, sem_score, z_topo, z_sem_raw, z_sem_align = model(x, a_topo, a_sem, node_types=node_types)
+        fused = topo_score + (0.12 * sem_score if use_semantic_view else 0.0)
         warm_align = align_weight * min(1.0, (epoch + 1) / max(8, epochs * 0.35))
 
         loss = (
-            F.mse_loss(topo_target[bundle.train_idx], y_struct[bundle.train_idx])
+            F.mse_loss(topo_score[bundle.train_idx], y_struct[bundle.train_idx])
             + 0.75 * F.mse_loss(fused[bundle.train_idx], y_rank[bundle.train_idx])
             + 0.08 * credible.reconstruction_loss(
                 z_topo,
-                art.model_topo_graph,
+                art.weighted_topo,
                 sample_size=4000 if model_nodes > 10000 else 7000,
             )
         )
         if use_semantic_view:
             loss = (
                 loss
-                + 0.35 * F.mse_loss(sem_target[bundle.train_idx], y_sem[bundle.train_idx])
+                + 0.35 * F.mse_loss(sem_score[bundle.train_idx], y_sem[bundle.train_idx])
                 + 0.25 * credible.sampled_pairwise_rank_loss(fused[bundle.train_idx], y_rank[bundle.train_idx])
                 + 0.15 * credible.correlation_loss(fused[bundle.train_idx], y_rank[bundle.train_idx])
             )
@@ -227,8 +222,8 @@ def train_variant_scores(
                 align_sample = 1024 if model_nodes > 10000 else 2048
                 align_loss_fn = asymmetric_contrastive_align_loss if align_mode == "asymmetric" else symmetric_contrastive_align_loss
                 loss = loss + warm_align * align_loss_fn(
-                    z_sem_align_target[bundle.train_idx],
-                    z_topo_target[bundle.train_idx],
+                    z_sem_align[bundle.train_idx],
+                    z_topo[bundle.train_idx],
                     sample_size=align_sample,
                     tau=0.5,
                 )
@@ -240,10 +235,10 @@ def train_variant_scores(
 
         model.eval()
         with torch.no_grad():
-            topo_val, sem_val, _, _, _ = model(x_topo, x_sem, node_types, a_topo, a_sem)
-            pred = base.minmax_scale(topo_val[target_nodes].detach().cpu().numpy())
+            topo_val, sem_val, _, _, _ = model(x, a_topo, a_sem, node_types=node_types)
+            pred = base.minmax_scale(topo_val.detach().cpu().numpy())
             if use_semantic_view:
-                pred = pred + 0.12 * base.minmax_scale(sem_val[target_nodes].detach().cpu().numpy())
+                pred = pred + 0.12 * base.minmax_scale(sem_val.detach().cpu().numpy())
         ndcg = ndcg_score(
             art.rank_target[bundle.val_idx].reshape(1, -1),
             pred[bundle.val_idx].reshape(1, -1),
@@ -268,11 +263,11 @@ def train_variant_scores(
         model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad():
-        topo_score, sem_score, z_topo, z_sem_raw, _ = model(x_topo, x_sem, node_types, a_topo, a_sem)
-    topo_np = topo_score[target_nodes].detach().cpu().numpy()
-    sem_np = sem_score[target_nodes].detach().cpu().numpy()
-    z_topo_np = z_topo[target_nodes].detach().cpu().numpy()
-    z_sem_np = z_sem_raw[target_nodes].detach().cpu().numpy()
+        topo_score, sem_score, z_topo, z_sem_raw, _ = model(x, a_topo, a_sem, node_types=node_types)
+    topo_np = topo_score.detach().cpu().numpy()
+    sem_np = sem_score.detach().cpu().numpy()
+    z_topo_np = z_topo.detach().cpu().numpy()
+    z_sem_np = z_sem_raw.detach().cpu().numpy()
     if not use_semantic_view:
         sem_np = np.zeros_like(topo_np)
         z_sem_np = np.zeros_like(z_topo_np)
@@ -291,7 +286,7 @@ def evaluate_variant(
     runs: int,
     t_steps: int,
 ) -> Tuple[Dict[str, float], Dict[str, float], List[float], List[float]]:
-    weighted_graph = nx.from_scipy_sparse_array(art.weighted_topo)
+    weighted_graph = nx.from_scipy_sparse_array(art.diffusion_graph)
     raw_graph = nx.from_scipy_sparse_array(art.bundle.adjacency)
     sir = credible.SemanticSIRSimulation(
         weighted_graph,

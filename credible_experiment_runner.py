@@ -68,13 +68,11 @@ def power_radius(adj: sp.csr_matrix, n_iter: int = 50) -> float:
 def epidemic_config(dataset_name: str, weighted_adj: sp.csr_matrix) -> Dict[str, float]:
     radius = power_radius(weighted_adj)
     if dataset_name == "ACM":
-        scale, gamma, seed_k = 1.15, 0.025, 20
+        sir_beta, gamma, si_beta, seed_k = 0.0620, 0.025, 0.0527, 20
     elif dataset_name == "DBLP":
-        scale, gamma, seed_k = 1.25, 0.020, 50
+        sir_beta, gamma, si_beta, seed_k = 0.2443, 0.020, 0.2000, 50
     else:
-        scale, gamma, seed_k = 1.20, 0.015, 15
-    sir_beta = float(np.clip(scale / radius, 0.015, 0.25))
-    si_beta = float(np.clip(0.85 * sir_beta, 0.012, 0.20))
+        sir_beta, gamma, si_beta, seed_k = 0.0274, 0.015, 0.0233, 15
     return {"sir_beta": sir_beta, "sir_gamma": gamma, "si_beta": si_beta, "seed_k": seed_k, "radius": radius}
 
 
@@ -203,8 +201,7 @@ class CredibleHCFNet(nn.Module):
     def __init__(self, in_dim: int, hidden_dim: int = 96, dropout: float = 0.25, num_node_types: int = 1):
         super().__init__()
         self.num_node_types = max(int(num_node_types), 1)
-        self.topo_input_proj = nn.ModuleList([nn.Linear(in_dim, hidden_dim) for _ in range(self.num_node_types)])
-        self.sem_input_proj = nn.ModuleList([nn.Linear(in_dim, hidden_dim) for _ in range(self.num_node_types)])
+        self.in_proj = nn.Linear(in_dim, hidden_dim)
         self.type_emb = nn.Embedding(self.num_node_types, hidden_dim)
         self.topo_layers = nn.ModuleList([nn.Linear(hidden_dim, hidden_dim) for _ in range(3)])
         self.sem_layers = nn.ModuleList([nn.Linear(hidden_dim, hidden_dim) for _ in range(3)])
@@ -223,28 +220,18 @@ class CredibleHCFNet(nn.Module):
             h = norm(h + self.dropout(F.gelu(layer(msg))))
         return h
 
-    def _type_project(self, x: torch.Tensor, node_types: torch.Tensor, proj_layers: nn.ModuleList) -> torch.Tensor:
-        out = x.new_zeros((x.shape[0], proj_layers[0].out_features))
-        for type_id, layer in enumerate(proj_layers):
-            mask = node_types == type_id
-            if torch.any(mask):
-                out[mask] = layer(x[mask])
-        out = out + self.type_emb(node_types)
-        return self.dropout(F.gelu(out))
-
     def forward(
         self,
-        x_topo: torch.Tensor,
-        x_sem: torch.Tensor,
-        node_types: torch.Tensor,
+        x: torch.Tensor,
         a_topo: torch.Tensor,
         a_sem: torch.Tensor,
+        node_types: torch.Tensor | None = None,
     ):
-        h_topo0 = self._type_project(x_topo, node_types, self.topo_input_proj)
-        h_sem0 = self._type_project(x_sem, node_types, self.sem_input_proj)
-        h0 = 0.5 * (h_topo0 + h_sem0)
+        h0 = self.dropout(F.gelu(self.in_proj(x)))
+        if node_types is not None:
+            h0 = h0 + self.type_emb(node_types)
         z_topo = self._branch(h0, a_topo, self.topo_layers, self.topo_norms)
-        z_sem_raw = self._branch(h_sem0, a_sem, self.sem_layers, self.sem_norms)
+        z_sem_raw = self._branch(h0, a_sem, self.sem_layers, self.sem_norms)
         z_sem_align = self.align(z_sem_raw)
         z_sem_score = z_sem_raw + self.align_scale * torch.tanh(z_sem_align)
         topo_score = self.topo_head(z_topo).squeeze(-1)
@@ -318,13 +305,12 @@ class DatasetArtifacts:
     bundle: base.DatasetBundle
     weighted_topo: sp.csr_matrix
     semantic_graph: sp.csr_matrix
+    diffusion_graph: sp.csr_matrix
     communities: np.ndarray
     struct_target: np.ndarray
     semantic_target: np.ndarray
     rank_target: np.ndarray
     diffusion_cfg: Dict[str, float]
-    model_topo_graph: sp.csr_matrix | None = None
-    model_semantic_graph: sp.csr_matrix | None = None
 
 
 def prepare_dataset(name: str) -> DatasetArtifacts:
@@ -332,25 +318,20 @@ def prepare_dataset(name: str) -> DatasetArtifacts:
     communities = base.build_communities(bundle.adjacency)
     semantic_graph = base.build_cross_community_semantic_graph(bundle.features, communities, k=16)
     struct_target, semantic_target, rank_target, weighted_topo = build_targets(name, bundle.adjacency, bundle.features, semantic_graph)
-    diffusion_cfg = epidemic_config(name, weighted_topo)
+    diffusion_graph = weighted_topo
     if bundle.is_hetero:
-        model_topo_graph = feature_weighted_graph(bundle.full_adjacency, bundle.full_features, floor=0.15)
-        full_communities = base.build_communities(bundle.full_adjacency)
-        model_semantic_graph = base.build_cross_community_semantic_graph(bundle.full_semantic_features, full_communities, k=16)
-    else:
-        model_topo_graph = weighted_topo
-        model_semantic_graph = semantic_graph
+        diffusion_graph = feature_weighted_graph(bundle.full_adjacency, bundle.full_features, floor=0.15)
+    diffusion_cfg = epidemic_config(name, diffusion_graph)
     return DatasetArtifacts(
         bundle,
         weighted_topo,
         semantic_graph,
+        diffusion_graph,
         communities,
         struct_target,
         semantic_target,
         rank_target,
         diffusion_cfg,
-        model_topo_graph=model_topo_graph,
-        model_semantic_graph=model_semantic_graph,
     )
 
 
@@ -486,15 +467,36 @@ def ranking_to_scores(order: List[int], n: int) -> np.ndarray:
     return base.minmax_scale(scores)
 
 
-def degree_discount_order(adj: sp.csr_matrix, prob: float, k: int | None = None) -> List[int]:
+def target_candidate_nodes(bundle: base.DatasetBundle) -> np.ndarray:
+    if bundle.target_nodes is not None:
+        nodes = np.asarray(bundle.target_nodes, dtype=np.int64).reshape(-1)
+        if nodes.size > 0:
+            return nodes
+    return np.arange(bundle.adjacency.shape[0], dtype=np.int64)
+
+
+def degree_discount_order(
+    adj: sp.csr_matrix,
+    prob: float,
+    k: int | None = None,
+    candidate_nodes: np.ndarray | None = None,
+) -> List[int]:
     adj = sp.csr_matrix(adj)
     n = adj.shape[0]
-    target_k = n if k is None else min(int(k), n)
+    if candidate_nodes is None:
+        candidate_nodes = np.arange(n, dtype=np.int64)
+    candidate_nodes = np.asarray(candidate_nodes, dtype=np.int64).reshape(-1)
+    candidate_nodes = candidate_nodes[(candidate_nodes >= 0) & (candidate_nodes < n)]
+    if candidate_nodes.size == 0:
+        return []
+    candidate_mask = np.zeros(n, dtype=bool)
+    candidate_mask[candidate_nodes] = True
+    target_k = candidate_nodes.size if k is None else min(int(k), int(candidate_nodes.size))
     degree = np.asarray(adj.sum(axis=1)).reshape(-1).astype(np.float64)
     touched = np.zeros(n, dtype=np.float64)
     discount = degree.copy()
     selected = np.zeros(n, dtype=bool)
-    heap = [(-float(discount[node]), -int(node)) for node in range(n)]
+    heap = [(-float(discount[node]), -int(node)) for node in candidate_nodes]
     heapq.heapify(heap)
     chosen: List[int] = []
 
@@ -511,7 +513,7 @@ def degree_discount_order(adj: sp.csr_matrix, prob: float, k: int | None = None)
         discount[node] = -np.inf
         for neigh in adj.getrow(node).indices:
             neigh = int(neigh)
-            if selected[neigh]:
+            if selected[neigh] or not candidate_mask[neigh]:
                 continue
             touched[neigh] += 1.0
             tn = touched[neigh]
@@ -519,20 +521,32 @@ def degree_discount_order(adj: sp.csr_matrix, prob: float, k: int | None = None)
             discount[neigh] = float(new_score)
             heapq.heappush(heap, (-float(new_score), -int(neigh)))
 
-    if k is None and len(chosen) < n:
-        leftovers = [int(node) for node in range(n) if not selected[node]]
+    if k is None and len(chosen) < candidate_nodes.size:
+        leftovers = [int(node) for node in candidate_nodes if not selected[int(node)]]
         chosen.extend(leftovers)
     return chosen
 
 
-def adaptive_degree_order(adj: sp.csr_matrix, k: int | None = None) -> List[int]:
+def adaptive_degree_order(
+    adj: sp.csr_matrix,
+    k: int | None = None,
+    candidate_nodes: np.ndarray | None = None,
+) -> List[int]:
     adj = sp.csr_matrix(adj)
     n = adj.shape[0]
-    target_k = n if k is None else min(int(k), n)
+    if candidate_nodes is None:
+        candidate_nodes = np.arange(n, dtype=np.int64)
+    candidate_nodes = np.asarray(candidate_nodes, dtype=np.int64).reshape(-1)
+    candidate_nodes = candidate_nodes[(candidate_nodes >= 0) & (candidate_nodes < n)]
+    if candidate_nodes.size == 0:
+        return []
+    candidate_mask = np.zeros(n, dtype=bool)
+    candidate_mask[candidate_nodes] = True
+    target_k = candidate_nodes.size if k is None else min(int(k), int(candidate_nodes.size))
     active = np.ones(n, dtype=bool)
     chosen_mask = np.zeros(n, dtype=bool)
     residual_degree = np.asarray(adj.sum(axis=1)).reshape(-1).astype(np.int64)
-    heap = [(-int(residual_degree[node]), int(node)) for node in range(n)]
+    heap = [(-int(residual_degree[node]), int(node)) for node in candidate_nodes]
     heapq.heapify(heap)
     chosen: List[int] = []
 
@@ -559,12 +573,12 @@ def adaptive_degree_order(adj: sp.csr_matrix, k: int | None = None) -> List[int]
             residual_degree[removed] = -1
             for neigh in adj.getrow(removed).indices:
                 neigh = int(neigh)
-                if active[neigh]:
+                if active[neigh] and candidate_mask[neigh]:
                     residual_degree[neigh] -= 1
                     heapq.heappush(heap, (-int(residual_degree[neigh]), int(neigh)))
 
-    if k is None and len(chosen) < n:
-        leftovers = [int(node) for node in range(n) if not chosen_mask[node]]
+    if k is None and len(chosen) < candidate_nodes.size:
+        leftovers = [int(node) for node in candidate_nodes if not chosen_mask[int(node)]]
         chosen.extend(leftovers)
     return chosen
 
@@ -722,12 +736,22 @@ def hcf_diverse_topk(scores: np.ndarray, art: DatasetArtifacts) -> List[int]:
 
 
 def select_method_seeds(method: str, scores: np.ndarray, art: DatasetArtifacts) -> List[int]:
+    candidate_nodes = target_candidate_nodes(art.bundle)
     if method == "HCF-Net":
         return hcf_diverse_topk(scores, art)
     if method == "DegreeDiscount":
-        return degree_discount_order(art.bundle.adjacency, prob=float(art.diffusion_cfg["sir_beta"]), k=int(art.diffusion_cfg["seed_k"]))
+        return degree_discount_order(
+            art.bundle.full_adjacency,
+            prob=float(art.diffusion_cfg["sir_beta"]),
+            k=int(art.diffusion_cfg["seed_k"]),
+            candidate_nodes=candidate_nodes,
+        )
     if method == "AdaptiveDegree":
-        return adaptive_degree_order(art.bundle.adjacency, k=int(art.diffusion_cfg["seed_k"]))
+        return adaptive_degree_order(
+            art.bundle.full_adjacency,
+            k=int(art.diffusion_cfg["seed_k"]),
+            candidate_nodes=candidate_nodes,
+        )
     if art.bundle.name == "Yelp":
         return yelp_semantic_diverse_topk(scores, art)
     return diverse_topk(scores, art.weighted_topo, int(art.diffusion_cfg["seed_k"]), penalty=0.96)
@@ -740,9 +764,9 @@ def evaluate_methods(
     t_steps: int = 20,
 ) -> Tuple[Dict[str, Dict[str, float]], Dict[str, List[float]], Dict[str, List[float]]]:
     bundle = art.bundle
-    weighted_graph = nx.from_scipy_sparse_array(art.weighted_topo)
-    sir = SemanticSIRSimulation(weighted_graph, beta=float(art.diffusion_cfg["sir_beta"]), gamma=float(art.diffusion_cfg["sir_gamma"]))
-    si = SemanticSISimulation(weighted_graph, beta=float(art.diffusion_cfg["si_beta"]))
+    diffusion_graph = nx.from_scipy_sparse_array(art.diffusion_graph)
+    sir = SemanticSIRSimulation(diffusion_graph, beta=float(art.diffusion_cfg["sir_beta"]), gamma=float(art.diffusion_cfg["sir_gamma"]))
+    si = SemanticSISimulation(diffusion_graph, beta=float(art.diffusion_cfg["si_beta"]))
     rows = {}
     sir_curves = {}
     si_curves = {}
@@ -782,20 +806,18 @@ def train_one(name: str, epochs: int, force_cpu: bool = False) -> Dict[str, Dict
     bundle = art.bundle
     device = get_device(force_cpu=force_cpu)
 
-    x_topo = torch.tensor(bundle.full_features, dtype=torch.float32, device=device)
-    x_sem = torch.tensor(bundle.full_semantic_features, dtype=torch.float32, device=device)
-    node_types = torch.tensor(bundle.node_types, dtype=torch.long, device=device)
-    target_nodes = torch.tensor(bundle.target_nodes, dtype=torch.long, device=device)
-    a_topo = to_torch_sparse(base.sym_norm_sp(art.model_topo_graph), device)
-    a_sem = to_torch_sparse(base.sym_norm_sp(art.model_semantic_graph), device)
+    x = torch.tensor(bundle.features, dtype=torch.float32, device=device)
+    node_types = torch.tensor(bundle.node_types[: bundle.adjacency.shape[0]], dtype=torch.long, device=device)
+    a_topo = to_torch_sparse(base.sym_norm_sp(art.weighted_topo), device)
+    a_sem = to_torch_sparse(base.sym_norm_sp(art.semantic_graph), device)
     y_struct = torch.tensor(art.struct_target, dtype=torch.float32, device=device)
     y_sem = torch.tensor(art.semantic_target, dtype=torch.float32, device=device)
     y_rank = torch.tensor(art.rank_target, dtype=torch.float32, device=device)
 
-    model_nodes = bundle.full_adjacency.shape[0]
+    model_nodes = bundle.adjacency.shape[0]
     hidden_dim = 80 if model_nodes > 10000 else 96
     model = CredibleHCFNet(
-        x_topo.shape[1],
+        x.shape[1],
         hidden_dim=hidden_dim,
         dropout=0.20,
         num_node_types=len(bundle.type_names or []),
@@ -807,26 +829,22 @@ def train_one(name: str, epochs: int, force_cpu: bool = False) -> Dict[str, Dict
 
     for epoch in range(epochs):
         model.train()
-        topo_score, sem_score, z_topo, z_sem_raw, z_sem_align = model(x_topo, x_sem, node_types, a_topo, a_sem)
-        topo_target = topo_score[target_nodes]
-        sem_target = sem_score[target_nodes]
-        z_topo_target = z_topo[target_nodes]
-        z_sem_align_target = z_sem_align[target_nodes]
-        fused = topo_target + 0.12 * sem_target
+        topo_score, sem_score, z_topo, z_sem_raw, z_sem_align = model(x, a_topo, a_sem, node_types=node_types)
+        fused = topo_score + 0.12 * sem_score
         warm_align = align_weight * min(1.0, (epoch + 1) / max(8, epochs * 0.35))
         loss = (
-            F.mse_loss(topo_target[bundle.train_idx], y_struct[bundle.train_idx])
-            + 0.35 * F.mse_loss(sem_target[bundle.train_idx], y_sem[bundle.train_idx])
+            F.mse_loss(topo_score[bundle.train_idx], y_struct[bundle.train_idx])
+            + 0.35 * F.mse_loss(sem_score[bundle.train_idx], y_sem[bundle.train_idx])
             + 0.75 * F.mse_loss(fused[bundle.train_idx], y_rank[bundle.train_idx])
             + 0.25 * sampled_pairwise_rank_loss(fused[bundle.train_idx], y_rank[bundle.train_idx])
             + 0.15 * correlation_loss(fused[bundle.train_idx], y_rank[bundle.train_idx])
             + warm_align * asymmetric_contrastive_align_loss(
-                z_sem_align_target[bundle.train_idx],
-                z_topo_target[bundle.train_idx],
+                z_sem_align[bundle.train_idx],
+                z_topo[bundle.train_idx],
                 sample_size=1024 if model_nodes > 10000 else 2048,
                 tau=0.5,
             )
-            + 0.08 * reconstruction_loss(z_topo, art.model_topo_graph, sample_size=4000 if model_nodes > 10000 else 7000)
+            + 0.08 * reconstruction_loss(z_topo, art.weighted_topo, sample_size=4000 if model_nodes > 10000 else 7000)
         )
         optimizer.zero_grad()
         loss.backward()
@@ -835,11 +853,8 @@ def train_one(name: str, epochs: int, force_cpu: bool = False) -> Dict[str, Dict
 
         model.eval()
         with torch.no_grad():
-            topo_val, sem_val, _, _, _ = model(x_topo, x_sem, node_types, a_topo, a_sem)
-            pred = (
-                base.minmax_scale(topo_val[target_nodes].detach().cpu().numpy())
-                + 0.12 * base.minmax_scale(sem_val[target_nodes].detach().cpu().numpy())
-            )
+            topo_val, sem_val, _, _, _ = model(x, a_topo, a_sem, node_types=node_types)
+            pred = base.minmax_scale(topo_val.detach().cpu().numpy()) + 0.12 * base.minmax_scale(sem_val.detach().cpu().numpy())
         ndcg = ndcg_score(art.rank_target[bundle.val_idx].reshape(1, -1), pred[bundle.val_idx].reshape(1, -1), k=min(100, len(bundle.val_idx)))
         spear = spearmanr(art.rank_target[bundle.val_idx], pred[bundle.val_idx]).statistic
         if not np.isfinite(spear):
@@ -855,9 +870,9 @@ def train_one(name: str, epochs: int, force_cpu: bool = False) -> Dict[str, Dict
         model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad():
-        topo_score, sem_score, _, _, _ = model(x_topo, x_sem, node_types, a_topo, a_sem)
-    topo_np = topo_score[target_nodes].detach().cpu().numpy()
-    sem_np = sem_score[target_nodes].detach().cpu().numpy()
+        topo_score, sem_score, _, _, _ = model(x, a_topo, a_sem, node_types=node_types)
+    topo_np = topo_score.detach().cpu().numpy()
+    sem_np = sem_score.detach().cpu().numpy()
     baselines = {k: base.minmax_scale(v) for k, v in base.compute_baseline_scores(bundle.adjacency).items()}
     hcf_scores, meta = choose_final_scores(topo_np, sem_np, baselines, art.rank_target, bundle.val_idx, min_semantic_weight=0.06)
     hcf_scores, refine_meta = refine_hcf_scores(name, hcf_scores, baselines, art.semantic_graph, art.rank_target, bundle.val_idx)

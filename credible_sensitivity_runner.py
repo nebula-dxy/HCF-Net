@@ -381,14 +381,14 @@ def evaluate_setting(
     runs: int,
     t_steps: int,
 ) -> Tuple[Dict[str, float], Dict[str, float], List[float], List[float]]:
-    weighted_graph = nx.from_scipy_sparse_array(art.weighted_topo)
+    diffusion_graph = nx.from_scipy_sparse_array(art.diffusion_graph)
     raw_graph = nx.from_scipy_sparse_array(art.bundle.adjacency)
     sir = credible.SemanticSIRSimulation(
-        weighted_graph,
+        diffusion_graph,
         beta=float(art.diffusion_cfg["sir_beta"]),
         gamma=float(art.diffusion_cfg["sir_gamma"]),
     )
-    si = credible.SemanticSISimulation(weighted_graph, beta=float(art.diffusion_cfg["si_beta"]))
+    si = credible.SemanticSISimulation(diffusion_graph, beta=float(art.diffusion_cfg["si_beta"]))
     metrics = base.evaluate_rankings(art.rank_target, scores, art.bundle.test_idx, k=100)
     sir_curve = credible.average_curve(sir, seeds, runs=runs, t_steps=t_steps)
     si_curve = credible.average_curve(si, seeds, runs=runs, t_steps=t_steps)
@@ -409,20 +409,18 @@ def train_model_for_alpha(
     bundle = art.bundle
     device = credible.get_device(force_cpu=force_cpu)
 
-    x_topo = torch.tensor(bundle.full_features, dtype=torch.float32, device=device)
-    x_sem = torch.tensor(bundle.full_semantic_features, dtype=torch.float32, device=device)
-    node_types = torch.tensor(bundle.node_types, dtype=torch.long, device=device)
-    target_nodes = torch.tensor(bundle.target_nodes, dtype=torch.long, device=device)
-    a_topo = credible.to_torch_sparse(base.sym_norm_sp(art.model_topo_graph), device)
-    a_sem = credible.to_torch_sparse(base.sym_norm_sp(art.model_semantic_graph), device)
+    x = torch.tensor(bundle.features, dtype=torch.float32, device=device)
+    node_types = torch.tensor(bundle.node_types[: bundle.adjacency.shape[0]], dtype=torch.long, device=device)
+    a_topo = credible.to_torch_sparse(base.sym_norm_sp(art.weighted_topo), device)
+    a_sem = credible.to_torch_sparse(base.sym_norm_sp(art.semantic_graph), device)
     y_struct = torch.tensor(art.struct_target, dtype=torch.float32, device=device)
     y_sem = torch.tensor(art.semantic_target, dtype=torch.float32, device=device)
     y_rank = torch.tensor(art.rank_target, dtype=torch.float32, device=device)
 
-    model_nodes = bundle.full_adjacency.shape[0]
+    model_nodes = bundle.adjacency.shape[0]
     hidden_dim = 80 if model_nodes > 10000 else 96
     model = credible.CredibleHCFNet(
-        x_topo.shape[1],
+        x.shape[1],
         hidden_dim=hidden_dim,
         dropout=0.20,
         num_node_types=len(bundle.type_names or []),
@@ -434,28 +432,24 @@ def train_model_for_alpha(
 
     for epoch in range(epochs):
         model.train()
-        topo_score, sem_score, z_topo, _, z_sem_align = model(x_topo, x_sem, node_types, a_topo, a_sem)
-        topo_target = topo_score[target_nodes]
-        sem_target = sem_score[target_nodes]
-        z_topo_target = z_topo[target_nodes]
-        z_sem_align_target = z_sem_align[target_nodes]
-        fused = topo_target + semantic_alpha * sem_target
+        topo_score, sem_score, z_topo, _, z_sem_align = model(x, a_topo, a_sem, node_types=node_types)
+        fused = topo_score + semantic_alpha * sem_score
         warm_align = align_weight * min(1.0, (epoch + 1) / max(8, epochs * 0.35))
         loss = (
-            F.mse_loss(topo_target[bundle.train_idx], y_struct[bundle.train_idx])
-            + 0.35 * F.mse_loss(sem_target[bundle.train_idx], y_sem[bundle.train_idx])
+            F.mse_loss(topo_score[bundle.train_idx], y_struct[bundle.train_idx])
+            + 0.35 * F.mse_loss(sem_score[bundle.train_idx], y_sem[bundle.train_idx])
             + 0.75 * F.mse_loss(fused[bundle.train_idx], y_rank[bundle.train_idx])
             + 0.25 * credible.sampled_pairwise_rank_loss(fused[bundle.train_idx], y_rank[bundle.train_idx])
             + 0.15 * credible.correlation_loss(fused[bundle.train_idx], y_rank[bundle.train_idx])
             + warm_align * credible.asymmetric_contrastive_align_loss(
-                z_sem_align_target[bundle.train_idx],
-                z_topo_target[bundle.train_idx],
+                z_sem_align[bundle.train_idx],
+                z_topo[bundle.train_idx],
                 sample_size=1024 if model_nodes > 10000 else 2048,
                 tau=0.5,
             )
             + 0.08 * credible.reconstruction_loss(
                 z_topo,
-                art.model_topo_graph,
+                art.weighted_topo,
                 sample_size=4000 if model_nodes > 10000 else 7000,
             )
         )
@@ -466,10 +460,8 @@ def train_model_for_alpha(
 
         model.eval()
         with torch.no_grad():
-            topo_val, sem_val, _, _, _ = model(x_topo, x_sem, node_types, a_topo, a_sem)
-            pred = base.minmax_scale(topo_val[target_nodes].detach().cpu().numpy()) + semantic_alpha * base.minmax_scale(
-                sem_val[target_nodes].detach().cpu().numpy()
-            )
+            topo_val, sem_val, _, _, _ = model(x, a_topo, a_sem, node_types=node_types)
+            pred = base.minmax_scale(topo_val.detach().cpu().numpy()) + semantic_alpha * base.minmax_scale(sem_val.detach().cpu().numpy())
         score = ranking_score(art.rank_target, pred, bundle.val_idx)
         if score > best_score:
             best_score = score
@@ -479,11 +471,11 @@ def train_model_for_alpha(
         model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad():
-        topo_score, sem_score, _, _, _ = model(x_topo, x_sem, node_types, a_topo, a_sem)
+        topo_score, sem_score, _, _, _ = model(x, a_topo, a_sem, node_types=node_types)
 
     return (
-        topo_score[target_nodes].detach().cpu().numpy(),
-        sem_score[target_nodes].detach().cpu().numpy(),
+        topo_score.detach().cpu().numpy(),
+        sem_score.detach().cpu().numpy(),
         {
             "device": str(device),
             "epochs": int(epochs),

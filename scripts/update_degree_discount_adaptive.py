@@ -59,18 +59,26 @@ def replace_requested_methods(methods: List[str]) -> List[str]:
     return result
 
 
-def fast_degree_discount_order(adj, prob: float) -> List[int]:
+def fast_degree_discount_order(adj, prob: float, candidate_nodes=None) -> List[int]:
     adj = sp.csr_matrix(base.ensure_csr(adj))
     n = adj.shape[0]
+    if candidate_nodes is None:
+        candidate_nodes = np.arange(n, dtype=np.int64)
+    candidate_nodes = np.asarray(candidate_nodes, dtype=np.int64).reshape(-1)
+    candidate_nodes = candidate_nodes[(candidate_nodes >= 0) & (candidate_nodes < n)]
+    if candidate_nodes.size == 0:
+        return []
+    candidate_mask = np.zeros(n, dtype=bool)
+    candidate_mask[candidate_nodes] = True
     degree = np.asarray(adj.sum(axis=1)).reshape(-1).astype(np.float64)
     touched = np.zeros(n, dtype=np.float64)
     discount = degree.copy()
     selected = np.zeros(n, dtype=bool)
-    heap = [(-float(discount[node]), -int(node)) for node in range(n)]
+    heap = [(-float(discount[node]), -int(node)) for node in candidate_nodes]
     heapq.heapify(heap)
     order: List[int] = []
 
-    while len(order) < n:
+    while len(order) < candidate_nodes.size and heap:
         neg_score, neg_node = heapq.heappop(heap)
         node = -int(neg_node)
         score = -float(neg_score)
@@ -83,27 +91,37 @@ def fast_degree_discount_order(adj, prob: float) -> List[int]:
         discount[node] = -np.inf
         for neigh in adj.getrow(node).indices:
             neigh = int(neigh)
-            if selected[neigh]:
+            if selected[neigh] or not candidate_mask[neigh]:
                 continue
             touched[neigh] += 1.0
             tn = touched[neigh]
             new_score = degree[neigh] - 2.0 * tn - (degree[neigh] - tn) * tn * prob
             discount[neigh] = float(new_score)
             heapq.heappush(heap, (-float(new_score), -int(neigh)))
+    leftovers = [int(node) for node in candidate_nodes if not selected[int(node)]]
+    order.extend(leftovers)
     return order
 
 
-def fast_adaptive_degree_order(adj) -> List[int]:
+def fast_adaptive_degree_order(adj, candidate_nodes=None) -> List[int]:
     adj = sp.csr_matrix(base.ensure_csr(adj))
     n = adj.shape[0]
+    if candidate_nodes is None:
+        candidate_nodes = np.arange(n, dtype=np.int64)
+    candidate_nodes = np.asarray(candidate_nodes, dtype=np.int64).reshape(-1)
+    candidate_nodes = candidate_nodes[(candidate_nodes >= 0) & (candidate_nodes < n)]
+    if candidate_nodes.size == 0:
+        return []
+    candidate_mask = np.zeros(n, dtype=bool)
+    candidate_mask[candidate_nodes] = True
     active = np.ones(n, dtype=bool)
     chosen = np.zeros(n, dtype=bool)
     residual_degree = np.asarray(adj.sum(axis=1)).reshape(-1).astype(np.int64)
-    heap = [(-int(residual_degree[node]), int(node)) for node in range(n)]
+    heap = [(-int(residual_degree[node]), int(node)) for node in candidate_nodes]
     heapq.heapify(heap)
     order: List[int] = []
 
-    while heap:
+    while heap and len(order) < candidate_nodes.size:
         neg_deg, node = heapq.heappop(heap)
         deg = -int(neg_deg)
         if not active[node]:
@@ -126,11 +144,11 @@ def fast_adaptive_degree_order(adj) -> List[int]:
             residual_degree[removed] = -1
             for neigh in adj.getrow(removed).indices:
                 neigh = int(neigh)
-                if active[neigh]:
+                if active[neigh] and candidate_mask[neigh]:
                     residual_degree[neigh] -= 1
                     heapq.heappush(heap, (-int(residual_degree[neigh]), int(neigh)))
 
-    leftovers = [int(node) for node in range(n) if not chosen[node]]
+    leftovers = [int(node) for node in candidate_nodes if not chosen[int(node)]]
     order.extend(leftovers)
     return order
 
@@ -141,15 +159,20 @@ def build_method_scores(art: credible.DatasetArtifacts) -> Dict[str, object]:
     runtimes = {}
     seed_orders = {}
     seed_k = int(art.diffusion_cfg["seed_k"])
+    candidate_nodes = credible.target_candidate_nodes(art.bundle)
 
     t0 = time.perf_counter()
-    dd_order = fast_degree_discount_order(art.bundle.adjacency, prob=float(art.diffusion_cfg["sir_beta"]))
+    dd_order = fast_degree_discount_order(
+        art.bundle.full_adjacency,
+        prob=float(art.diffusion_cfg["sir_beta"]),
+        candidate_nodes=candidate_nodes,
+    )
     runtimes["DegreeDiscount"] = float(time.perf_counter() - t0)
     scores["DegreeDiscount"] = credible.ranking_to_scores(dd_order, target_count)
     seed_orders["DegreeDiscount"] = [int(v) for v in dd_order[:seed_k]]
 
     t0 = time.perf_counter()
-    ad_order = fast_adaptive_degree_order(art.bundle.adjacency)
+    ad_order = fast_adaptive_degree_order(art.bundle.full_adjacency, candidate_nodes=candidate_nodes)
     runtimes["AdaptiveDegree"] = float(time.perf_counter() - t0)
     scores["AdaptiveDegree"] = credible.ranking_to_scores(ad_order, target_count)
     seed_orders["AdaptiveDegree"] = [int(v) for v in ad_order[:seed_k]]
@@ -170,7 +193,7 @@ def update_dataset(report: Dict[str, object], dataset: str) -> Dict[str, object]
     runtime_table = computed["runtimes"]
     seed_orders = computed["seed_orders"]
 
-    weighted_graph = nx.from_scipy_sparse_array(art.weighted_topo)
+    weighted_graph = nx.from_scipy_sparse_array(art.diffusion_graph)
     sir = credible.SemanticSIRSimulation(
         weighted_graph,
         beta=float(art.diffusion_cfg["sir_beta"]),
