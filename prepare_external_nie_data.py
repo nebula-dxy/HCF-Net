@@ -1,4 +1,6 @@
 import json
+import os
+import shutil
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -16,6 +18,46 @@ ROOT = Path(__file__).resolve().parent
 OUT_DIR = ROOT / "external_prepared"
 OUT_DIR.mkdir(exist_ok=True)
 SEED = 42
+HGB_ROOT = ROOT / "external_datasets" / "pyg_hgb"
+
+
+def ensure_local_hgb_raw(name: str) -> None:
+    env_key = f"HGB_{name.upper()}_RAW_DIR"
+    raw_src = os.environ.get(env_key)
+    if not raw_src:
+        return
+
+    src_dir = Path(raw_src)
+    if not src_dir.exists():
+        raise FileNotFoundError(f"{env_key} does not exist: {src_dir}")
+
+    # Accept either:
+    # 1. .../ACM/info.dat etc.
+    # 2. .../info.dat etc.
+    candidate = src_dir / name
+    if candidate.exists():
+        src_dir = candidate
+
+    required = ["info.dat", "node.dat", "link.dat", "label.dat", "label.dat.test"]
+    missing = [fname for fname in required if not (src_dir / fname).exists()]
+    if missing:
+        raise FileNotFoundError(
+            f"{env_key} is missing required HGB raw files for {name}: {missing} under {src_dir}"
+        )
+
+    dst_dir = HGB_ROOT / name.lower() / "raw" / name
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    for fname in required:
+        src = src_dir / fname
+        dst = dst_dir / fname
+        if dst.exists() or dst.is_symlink():
+            dst.unlink()
+        try:
+            dst.symlink_to(src.resolve())
+        except OSError:
+            shutil.copy2(src, dst)
+
+    print(f"Using local HGB raw files for {name} from {src_dir}")
 
 
 def set_seed(seed: int = SEED) -> None:
@@ -89,13 +131,14 @@ def export_mahe_triplets(path: Path, triplets: List[Tuple[str, str]]) -> None:
 
 
 def prepare_hgb_dataset(name: str) -> Dict[str, object]:
+    ensure_local_hgb_raw(name)
     art = credible.prepare_dataset(name)
     if name == "ACM":
-        raw = HGBDataset(root=str(ROOT / "external_datasets" / "pyg_hgb"), name="ACM")[0]
+        raw = HGBDataset(root=str(HGB_ROOT), name="ACM")[0]
         ordered_types = [("paper", raw["paper"].num_nodes), ("author", raw["author"].num_nodes), ("subject", raw["subject"].num_nodes), ("term", raw["term"].num_nodes)]
         mahe_relations = [("paper", "author"), ("paper", "subject")]
     elif name == "DBLP":
-        raw = HGBDataset(root=str(ROOT / "external_datasets" / "pyg_hgb"), name="DBLP")[0]
+        raw = HGBDataset(root=str(HGB_ROOT), name="DBLP")[0]
         ordered_types = [("author", raw["author"].num_nodes), ("paper", raw["paper"].num_nodes), ("term", raw["term"].num_nodes), ("venue", raw["venue"].num_nodes)]
         mahe_relations = [("author", "paper"), ("paper", "venue")]
     else:
