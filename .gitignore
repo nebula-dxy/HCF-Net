@@ -1,1 +1,6 @@
-"__pycache__/" 
+__pycache__/
+results/
+results_hcfnet/
+results_hcfnet_credible/
+results_external_credible/
+hetero_fast_results/
