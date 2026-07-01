@@ -313,6 +313,37 @@ def reconstruction_loss(z: torch.Tensor, adj: sp.csr_matrix, sample_size: int = 
     )
 
 
+def topology_bootstrap_loss(
+    z_topo: torch.Tensor,
+    z_sem: torch.Tensor,
+    adj: sp.csr_matrix,
+    sample_size: int = 6000,
+) -> torch.Tensor:
+    coo = sp.triu(adj, k=1).tocoo()
+    if coo.nnz == 0:
+        return torch.tensor(0.0, device=z_topo.device)
+    rng = np.random.default_rng(SEED)
+    choose = rng.choice(coo.nnz, size=min(sample_size, coo.nnz), replace=False)
+    pos_u = coo.row[choose]
+    pos_v = coo.col[choose]
+    n = adj.shape[0]
+    neg_u = rng.integers(0, n, size=len(choose))
+    neg_v = rng.integers(0, n, size=len(choose))
+    for i in range(len(choose)):
+        while neg_u[i] == neg_v[i] or adj[neg_u[i], neg_v[i]] != 0:
+            neg_u[i] = rng.integers(0, n)
+            neg_v[i] = rng.integers(0, n)
+    pos_topo = (z_topo[pos_u] * z_topo[pos_v]).sum(dim=1)
+    neg_topo = (z_topo[neg_u] * z_topo[neg_v]).sum(dim=1)
+    pos_sem = (z_sem[pos_u] * z_sem[pos_v]).sum(dim=1)
+    neg_sem = (z_sem[neg_u] * z_sem[neg_v]).sum(dim=1)
+    loss_topo = F.binary_cross_entropy_with_logits(pos_topo, torch.ones_like(pos_topo))
+    loss_topo = loss_topo + F.binary_cross_entropy_with_logits(neg_topo, torch.zeros_like(neg_topo))
+    loss_sem = F.binary_cross_entropy_with_logits(pos_sem, torch.ones_like(pos_sem))
+    loss_sem = loss_sem + F.binary_cross_entropy_with_logits(neg_sem, torch.zeros_like(neg_sem))
+    return 0.5 * (loss_topo + loss_sem)
+
+
 @dataclass
 class DatasetArtifacts:
     bundle: base.DatasetBundle
@@ -357,43 +388,30 @@ def prepare_dataset(name: str) -> DatasetArtifacts:
 def choose_final_scores(
     topo_scores: np.ndarray,
     sem_scores: np.ndarray,
-    baselines: Dict[str, np.ndarray],
     target: np.ndarray,
     val_idx: np.ndarray,
     min_semantic_weight: float = 0.0,
 ) -> Tuple[np.ndarray, Dict[str, float | str]]:
     topo = base.minmax_scale(topo_scores)
     sem = base.minmax_scale(sem_scores)
-    degree = base.minmax_scale(baselines["Degree"])
-    pagerank = base.minmax_scale(baselines["PageRank"])
-    ci = base.minmax_scale(baselines["CI"])
     candidates = []
-    for sem_w in [0.0, 0.06, 0.10, 0.14, 0.18, 0.24]:
+    for sem_w in [0.0, 0.06, 0.10, 0.14, 0.18, 0.24, 0.30, 0.36, 0.42]:
         if sem_w + 1e-12 < min_semantic_weight:
             continue
-        for pr_w in [0.0, 0.10, 0.18, 0.24]:
-            for deg_w in [0.0, 0.10, 0.16, 0.22]:
-                for ci_w in [0.0, 0.06, 0.10, 0.14]:
-                    aux = sem_w + pr_w + deg_w + ci_w
-                    if aux > 0.65:
-                        continue
-                    topo_w = 1.0 - aux
-                    if topo_w < 0.35:
-                        continue
-                    pred = base.minmax_scale(topo_w * topo + sem_w * sem + pr_w * pagerank + deg_w * degree + ci_w * ci)
-                    tag = f"late_fusion_t{topo_w:.2f}_s{sem_w:.2f}_p{pr_w:.2f}_d{deg_w:.2f}_c{ci_w:.2f}"
-                    candidates.append((tag, pred, sem_w, topo_w, pr_w, deg_w, ci_w))
+        topo_w = 1.0 - sem_w
+        if topo_w < 0.35:
+            continue
+        pred = base.minmax_scale(topo_w * topo + sem_w * sem)
+        tag = f"late_fusion_t{topo_w:.2f}_s{sem_w:.2f}"
+        candidates.append((tag, pred, sem_w, topo_w))
     best_score = -float("inf")
     best_pred = candidates[0][1]
     best_meta: Dict[str, float | str] = {
         "score_name": candidates[0][0],
         "topo_weight": candidates[0][3],
         "semantic_weight": candidates[0][2],
-        "pagerank_weight": candidates[0][4],
-        "degree_weight": candidates[0][5],
-        "ci_weight": candidates[0][6],
     }
-    for score_name, pred, sem_w, topo_w, pr_w, deg_w, ci_w in candidates:
+    for score_name, pred, sem_w, topo_w in candidates:
         score = ranking_quality(target, pred, val_idx)
         if score > best_score:
             best_score = score
@@ -402,9 +420,6 @@ def choose_final_scores(
                 "score_name": score_name,
                 "topo_weight": topo_w,
                 "semantic_weight": sem_w,
-                "pagerank_weight": pr_w,
-                "degree_weight": deg_w,
-                "ci_weight": ci_w,
             }
     return best_pred, best_meta
 
@@ -412,56 +427,13 @@ def choose_final_scores(
 def refine_hcf_scores(
     dataset_name: str,
     hcf_scores: np.ndarray,
-    baselines: Dict[str, np.ndarray],
     semantic_graph: sp.csr_matrix,
     target: np.ndarray | None = None,
     val_idx: np.ndarray | None = None,
 ) -> Tuple[np.ndarray, Dict[str, float | str]]:
+    del dataset_name, semantic_graph, target, val_idx
     hcf = base.minmax_scale(hcf_scores)
-    pagerank = base.minmax_scale(baselines["PageRank"])
-    degree = base.minmax_scale(baselines["Degree"])
-    ci = base.minmax_scale(baselines["CI"])
-    bridge = base.minmax_scale(np.asarray(semantic_graph.sum(axis=1)).reshape(-1))
-
-    if target is None or val_idx is None:
-        if dataset_name == "ACM":
-            refined = base.minmax_scale(0.62 * hcf + 0.16 * pagerank + 0.12 * degree + 0.10 * bridge)
-            meta = {"refine_name": "pr_deg_bridge_guard_v2", "hcf": 0.62, "pagerank": 0.16, "degree": 0.12, "bridge": 0.10}
-        elif dataset_name == "DBLP":
-            refined = base.minmax_scale(0.80 * hcf + 0.20 * degree)
-            meta = {"refine_name": "degree_guard_v2", "hcf": 0.80, "degree": 0.20}
-        else:
-            refined = hcf
-            meta = {"refine_name": "identity", "hcf": 1.0}
-        return refined, meta
-
-    best_score = ranking_quality(target, hcf, val_idx)
-    best_pred = hcf
-    best_meta: Dict[str, float | str] = {"refine_name": "identity", "hcf_weight": 1.0}
-    for pr_w in [0.0, 0.06, 0.10, 0.14, 0.18]:
-        for deg_w in [0.0, 0.06, 0.10, 0.14, 0.20]:
-            for ci_w in [0.0, 0.04, 0.08, 0.12]:
-                for bridge_w in [0.0, 0.04, 0.08, 0.12]:
-                    aux = pr_w + deg_w + ci_w + bridge_w
-                    if aux > 0.40:
-                        continue
-                    hcf_w = 1.0 - aux
-                    if hcf_w < 0.60:
-                        continue
-                    pred = base.minmax_scale(hcf_w * hcf + pr_w * pagerank + deg_w * degree + ci_w * ci + bridge_w * bridge)
-                    score = ranking_quality(target, pred, val_idx)
-                    if score > best_score:
-                        best_score = score
-                        best_pred = pred
-                        best_meta = {
-                            "refine_name": "val_searched_guard",
-                            "hcf_weight": hcf_w,
-                            "pagerank_weight": pr_w,
-                            "degree_weight": deg_w,
-                            "ci_weight": ci_w,
-                            "bridge_weight": bridge_w,
-                        }
-    return best_pred, best_meta
+    return hcf, {"refine_name": "identity", "hcf_weight": 1.0}
 
 
 def diverse_topk(scores: np.ndarray, adj: sp.csr_matrix, k: int, penalty: float = 0.92) -> List[int]:
@@ -788,10 +760,6 @@ def train_one(name: str, epochs: int, force_cpu: bool = False) -> Dict[str, Dict
     target_nodes = torch.tensor(bundle.target_nodes, dtype=torch.long, device=device)
     a_topo = to_torch_sparse(base.sym_norm_sp(art.model_topo_graph), device)
     a_sem = to_torch_sparse(base.sym_norm_sp(art.model_semantic_graph), device)
-    y_struct = torch.tensor(art.struct_target, dtype=torch.float32, device=device)
-    y_sem = torch.tensor(art.semantic_target, dtype=torch.float32, device=device)
-    y_rank = torch.tensor(art.rank_target, dtype=torch.float32, device=device)
-
     model_nodes = bundle.full_adjacency.shape[0]
     hidden_dim = 80 if model_nodes > 10000 else 96
     model = CredibleHCFNet(
@@ -808,25 +776,23 @@ def train_one(name: str, epochs: int, force_cpu: bool = False) -> Dict[str, Dict
     for epoch in range(epochs):
         model.train()
         topo_score, sem_score, z_topo, z_sem_raw, z_sem_align = model(x_topo, x_sem, node_types, a_topo, a_sem)
-        topo_target = topo_score[target_nodes]
-        sem_target = sem_score[target_nodes]
         z_topo_target = z_topo[target_nodes]
         z_sem_align_target = z_sem_align[target_nodes]
-        fused = topo_target + 0.12 * sem_target
         warm_align = align_weight * min(1.0, (epoch + 1) / max(8, epochs * 0.35))
         loss = (
-            F.mse_loss(topo_target[bundle.train_idx], y_struct[bundle.train_idx])
-            + 0.35 * F.mse_loss(sem_target[bundle.train_idx], y_sem[bundle.train_idx])
-            + 0.75 * F.mse_loss(fused[bundle.train_idx], y_rank[bundle.train_idx])
-            + 0.25 * sampled_pairwise_rank_loss(fused[bundle.train_idx], y_rank[bundle.train_idx])
-            + 0.15 * correlation_loss(fused[bundle.train_idx], y_rank[bundle.train_idx])
-            + warm_align * asymmetric_contrastive_align_loss(
+            warm_align * asymmetric_contrastive_align_loss(
                 z_sem_align_target[bundle.train_idx],
                 z_topo_target[bundle.train_idx],
                 sample_size=1024 if model_nodes > 10000 else 2048,
                 tau=0.5,
             )
-            + 0.08 * reconstruction_loss(z_topo, art.model_topo_graph, sample_size=4000 if model_nodes > 10000 else 7000)
+            + 0.12 * reconstruction_loss(z_topo, art.model_topo_graph, sample_size=4000 if model_nodes > 10000 else 7000)
+            + 0.20 * topology_bootstrap_loss(
+                z_topo_target,
+                z_sem_align_target,
+                art.weighted_topo,
+                sample_size=3000 if bundle.adjacency.shape[0] > 10000 else 5000,
+            )
         )
         optimizer.zero_grad()
         loss.backward()
@@ -859,8 +825,8 @@ def train_one(name: str, epochs: int, force_cpu: bool = False) -> Dict[str, Dict
     topo_np = topo_score[target_nodes].detach().cpu().numpy()
     sem_np = sem_score[target_nodes].detach().cpu().numpy()
     baselines = {k: base.minmax_scale(v) for k, v in base.compute_baseline_scores(bundle.adjacency).items()}
-    hcf_scores, meta = choose_final_scores(topo_np, sem_np, baselines, art.rank_target, bundle.val_idx, min_semantic_weight=0.06)
-    hcf_scores, refine_meta = refine_hcf_scores(name, hcf_scores, baselines, art.semantic_graph, art.rank_target, bundle.val_idx)
+    hcf_scores, meta = choose_final_scores(topo_np, sem_np, art.rank_target, bundle.val_idx, min_semantic_weight=0.06)
+    hcf_scores, refine_meta = refine_hcf_scores(name, hcf_scores, art.semantic_graph, art.rank_target, bundle.val_idx)
 
     method_scores = {"HCF-Net": hcf_scores}
     method_scores.update(baselines)

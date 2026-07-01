@@ -19,6 +19,20 @@ OUT_DIR = ROOT / "external_prepared"
 OUT_DIR.mkdir(exist_ok=True)
 SEED = 42
 HGB_ROOT = ROOT / "external_datasets" / "pyg_hgb"
+TRUE_SIR_DIR = ROOT / "results_hcfnet_credible" / "true_sir"
+
+
+def load_true_sir_scores(name: str, target_count: int) -> np.ndarray | None:
+    pattern = f"{name}_true_sir_scores_*.npy"
+    matches = sorted(TRUE_SIR_DIR.glob(pattern))
+    if not matches:
+        return None
+    scores = np.load(matches[-1]).astype(np.float32)
+    if scores.shape[0] != target_count:
+        raise ValueError(
+            f"True SIR score length mismatch for {name}: expected {target_count}, got {scores.shape[0]}"
+        )
+    return scores
 
 
 def ensure_local_hgb_raw(name: str) -> None:
@@ -174,8 +188,11 @@ def prepare_hgb_dataset(name: str) -> Dict[str, object]:
     sem_dense = propagate_target_features(full_adj, art.bundle.features, target_count)
     semantic_features = svd_embed(sp.csr_matrix(sem_dense), dim=128)
 
+    target_labels = load_true_sir_scores(name, target_count)
+    if target_labels is None:
+        target_labels = art.rank_target.astype(np.float32)
     labels = np.zeros(total_nodes, dtype=np.float32)
-    labels[:target_count] = art.rank_target.astype(np.float32)
+    labels[:target_count] = target_labels
     invalid_masks = np.ones(total_nodes, dtype=np.int64)
     invalid_masks[:target_count] = 0
 
@@ -262,8 +279,11 @@ def prepare_yelp_dataset() -> Dict[str, object]:
     semantic_features = svd_embed(sp.csr_matrix(sem_dense), dim=128)
 
     target_count = type_sizes[0][1]
+    target_labels = load_true_sir_scores("Yelp", target_count)
+    if target_labels is None:
+        target_labels = art.rank_target.astype(np.float32)
     labels = np.zeros(total_nodes, dtype=np.float32)
-    labels[:target_count] = art.rank_target.astype(np.float32)
+    labels[:target_count] = target_labels
     invalid_masks = np.ones(total_nodes, dtype=np.int64)
     invalid_masks[:target_count] = 0
 

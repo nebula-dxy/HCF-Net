@@ -4,18 +4,25 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Sequence
 
 
 ROOT = Path(__file__).resolve().parent
 PYTHON_EXE = Path(sys.executable)
 
 
+def script_path(*parts: str) -> Path:
+    return ROOT.joinpath(*parts)
+
+
 def prepared_path(dataset: str) -> str:
     return str(ROOT / "external_prepared" / dataset / f"{dataset.lower()}_nie.pt")
 
 
-def run(cmd):
-    print("RUN", " ".join(cmd))
+def run(cmd: Sequence[str], dry_run: bool = False) -> None:
+    print("RUN", " ".join(str(c) for c in cmd))
+    if dry_run:
+        return
     subprocess.run(cmd, cwd=ROOT, check=True)
 
 
@@ -29,11 +36,11 @@ def runtime_output_path(method: str, dataset: str) -> Path:
     raise ValueError(method)
 
 
-def run_geni(dataset: str, epochs: int, gpu: int):
+def run_geni(dataset: str, epochs: int, gpu: int, dry_run: bool = False) -> None:
     tag = f"{dataset.lower()}_geni"
     cmd = [
         str(PYTHON_EXE),
-        r"external\RGTN-NIE\GENI\geni_batch_train.py",
+        str(script_path("external", "RGTN-NIE", "GENI", "geni_batch_train.py")),
         "--dataset", f"CUSTOM_{dataset}_rel",
         "--data_path", prepared_path(dataset),
         "--cross-num", "1",
@@ -51,14 +58,14 @@ def run_geni(dataset: str, epochs: int, gpu: int):
         cmd.append("--spm")
     else:
         cmd.extend(["--no-scale", "--patience", "20"])
-    run(cmd)
+    run(cmd, dry_run=dry_run)
 
 
-def run_rgtn(dataset: str, epochs: int, gpu: int):
+def run_rgtn(dataset: str, epochs: int, gpu: int, dry_run: bool = False) -> None:
     tag = f"{dataset.lower()}_rgtn"
     cmd = [
         str(PYTHON_EXE),
-        r"external\RGTN-NIE\two_branch\two_branch_batch_train.py",
+        str(script_path("external", "RGTN-NIE", "two_branch", "two_branch_batch_train.py")),
         "--dataset", f"CUSTOM_{dataset}_two",
         "--data_path", prepared_path(dataset),
         "--cross-num", "1",
@@ -78,17 +85,17 @@ def run_rgtn(dataset: str, epochs: int, gpu: int):
         "--spm",
         "--pred-dim", "16",
     ]
-    run(cmd)
+    run(cmd, dry_run=dry_run)
 
 
-def run_easing(dataset: str, epochs: int, gpu: int):
+def run_easing(dataset: str, epochs: int, gpu: int, dry_run: bool = False) -> None:
     tag = f"{dataset.lower()}_easing"
     cmd = [
         str(PYTHON_EXE),
-        r"external\EASING\easing\main_easing.py",
+        str(script_path("external", "EASING", "easing", "main_easing.py")),
         "--dataset", f"CUSTOM_{dataset}",
-        "--data_path", str(ROOT).replace("\\", "/"),
-        "--graph_data", f"external_prepared/{dataset}/{dataset.lower()}_nie.pt",
+        "--data_path", str(ROOT),
+        "--graph_data", str(script_path("external_prepared", dataset, f"{dataset.lower()}_nie.pt")),
         "--semantic_data", "placeholder.pk",
         "--structure_data", "placeholder.pk",
         "--cross-num", "1",
@@ -102,7 +109,7 @@ def run_easing(dataset: str, epochs: int, gpu: int):
         "--patience", "60",
         "--min-epoch", "10",
     ]
-    run(cmd)
+    run(cmd, dry_run=dry_run)
 
 
 def main() -> None:
@@ -113,17 +120,18 @@ def main() -> None:
     parser.add_argument("--rgtn-epochs", type=int, default=40)
     parser.add_argument("--easing-epochs", type=int, default=20)
     parser.add_argument("--gpu", type=int, default=-1)
+    parser.add_argument("--dry-run", action="store_true", help="Print the commands without executing them")
     args = parser.parse_args()
 
     for dataset in args.datasets:
         for method in args.methods:
             started_at = time.perf_counter()
             if method == "GENI":
-                run_geni(dataset, args.geni_epochs, args.gpu)
+                run_geni(dataset, args.geni_epochs, args.gpu, dry_run=args.dry_run)
             elif method == "RGTN":
-                run_rgtn(dataset, args.rgtn_epochs, args.gpu)
+                run_rgtn(dataset, args.rgtn_epochs, args.gpu, dry_run=args.dry_run)
             elif method == "EASING":
-                run_easing(dataset, args.easing_epochs, args.gpu)
+                run_easing(dataset, args.easing_epochs, args.gpu, dry_run=args.dry_run)
             else:
                 raise ValueError(f"Unsupported method: {method}")
             out_path = runtime_output_path(method, dataset)

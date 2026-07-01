@@ -296,11 +296,9 @@ def score_embeddings(art: credible.DatasetArtifacts, embeds: np.ndarray) -> np.n
     distances, _ = nbrs.kneighbors(z)
     density = base.minmax_scale(np.asarray(1.0 - distances[:, 1:]).mean(axis=1))
 
-    topo = base.compute_baseline_scores(bundle.adjacency)
-    degree = base.minmax_scale(topo["Degree"])
-    pagerank = base.minmax_scale(topo["PageRank"])
-    ci = base.minmax_scale(topo["CI"])
-    return base.minmax_scale(0.38 * pagerank + 0.22 * degree + 0.16 * ci + 0.14 * bridge + 0.10 * density)
+    # Keep HeCo scoring primarily tied to the learned representation instead of
+    # boosting it with strong hand-crafted centrality baselines.
+    return base.minmax_scale(0.60 * bridge + 0.40 * density)
 
 
 def run_dataset(name: str, force_cpu: bool = False) -> Dict[str, float]:

@@ -10,4 +10,5 @@ joblib
 tqdm
 pyyaml
 torch-geometric
+dgl
 tensorflow
