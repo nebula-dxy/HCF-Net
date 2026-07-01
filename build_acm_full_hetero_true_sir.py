@@ -2,6 +2,7 @@ import json
 import random
 import time
 from pathlib import Path
+from typing import Dict, List, Tuple
 
 import networkx as nx
 import numpy as np
@@ -15,7 +16,7 @@ OUT_DIR = ROOT / "results_hcfnet_credible" / "true_sir"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def build_weighted_full_hetero_graph() -> tuple[nx.Graph, list[list[tuple[int, float]]], np.ndarray, dict]:
+def build_weighted_full_hetero_graph() -> Tuple[nx.Graph, List[List[Tuple[int, float]]], np.ndarray, Dict[str, float]]:
     payload = torch.load(
         ROOT / "external_prepared" / "ACM" / "acm_nie.pt",
         map_location="cpu",
@@ -63,7 +64,7 @@ def build_weighted_full_hetero_graph() -> tuple[nx.Graph, list[list[tuple[int, f
     return graph, nbrs, target_mask, cfg
 
 
-def simulate_target_coverage(neighbors: list[list[tuple[int, float]]], target_mask: np.ndarray, beta: float, gamma: float, seed: int, t_steps: int) -> float:
+def simulate_target_coverage(neighbors: List[List[Tuple[int, float]]], target_mask: np.ndarray, beta: float, gamma: float, seed: int, t_steps: int) -> float:
     status = np.zeros(len(target_mask), dtype=np.int8)
     infected = {seed}
     recovered = set()

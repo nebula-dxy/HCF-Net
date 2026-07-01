@@ -2,7 +2,7 @@ import json
 import os
 import shutil
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import scipy.sparse as sp
@@ -22,7 +22,7 @@ HGB_ROOT = ROOT / "external_datasets" / "pyg_hgb"
 TRUE_SIR_DIR = ROOT / "results_hcfnet_credible" / "true_sir"
 
 
-def load_true_sir_scores(name: str, target_count: int) -> np.ndarray | None:
+def load_true_sir_scores(name: str, target_count: int) -> Optional[np.ndarray]:
     pattern = f"{name}_true_sir_scores_*.npy"
     matches = sorted(TRUE_SIR_DIR.glob(pattern))
     if not matches:

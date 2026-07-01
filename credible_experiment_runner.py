@@ -6,7 +6,7 @@ import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -354,8 +354,8 @@ class DatasetArtifacts:
     semantic_target: np.ndarray
     rank_target: np.ndarray
     diffusion_cfg: Dict[str, float]
-    model_topo_graph: sp.csr_matrix | None = None
-    model_semantic_graph: sp.csr_matrix | None = None
+    model_topo_graph: Optional[sp.csr_matrix] = None
+    model_semantic_graph: Optional[sp.csr_matrix] = None
 
 
 def prepare_dataset(name: str) -> DatasetArtifacts:
@@ -428,8 +428,8 @@ def refine_hcf_scores(
     dataset_name: str,
     hcf_scores: np.ndarray,
     semantic_graph: sp.csr_matrix,
-    target: np.ndarray | None = None,
-    val_idx: np.ndarray | None = None,
+    target: Optional[np.ndarray] = None,
+    val_idx: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, Dict[str, float | str]]:
     del dataset_name, semantic_graph, target, val_idx
     hcf = base.minmax_scale(hcf_scores)
@@ -458,7 +458,7 @@ def ranking_to_scores(order: List[int], n: int) -> np.ndarray:
     return base.minmax_scale(scores)
 
 
-def degree_discount_order(adj: sp.csr_matrix, prob: float, k: int | None = None) -> List[int]:
+def degree_discount_order(adj: sp.csr_matrix, prob: float, k: Optional[int] = None) -> List[int]:
     adj = sp.csr_matrix(adj)
     n = adj.shape[0]
     target_k = n if k is None else min(int(k), n)
@@ -497,7 +497,7 @@ def degree_discount_order(adj: sp.csr_matrix, prob: float, k: int | None = None)
     return chosen
 
 
-def adaptive_degree_order(adj: sp.csr_matrix, k: int | None = None) -> List[int]:
+def adaptive_degree_order(adj: sp.csr_matrix, k: Optional[int] = None) -> List[int]:
     adj = sp.csr_matrix(adj)
     n = adj.shape[0]
     target_k = n if k is None else min(int(k), n)

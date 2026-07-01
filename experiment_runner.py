@@ -3,7 +3,7 @@ import math
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -40,13 +40,13 @@ class DatasetBundle:
     train_idx: np.ndarray
     val_idx: np.ndarray
     test_idx: np.ndarray
-    full_adjacency: sp.csr_matrix | None = None
-    full_features: np.ndarray | None = None
-    full_semantic_features: np.ndarray | None = None
-    node_types: np.ndarray | None = None
-    target_nodes: np.ndarray | None = None
-    target_type: str | None = None
-    type_names: List[str] | None = None
+    full_adjacency: Optional[sp.csr_matrix] = None
+    full_features: Optional[np.ndarray] = None
+    full_semantic_features: Optional[np.ndarray] = None
+    node_types: Optional[np.ndarray] = None
+    target_nodes: Optional[np.ndarray] = None
+    target_type: Optional[str] = None
+    type_names: Optional[List[str]] = None
     is_hetero: bool = False
 
     def __post_init__(self) -> None:
@@ -409,7 +409,7 @@ def single_seed_mean_field_scores(
     beta: float,
     gamma: float,
     t_steps: int,
-    batch_size: int | None = None,
+    batch_size: Optional[int] = None,
 ) -> np.ndarray:
     adj = adj.tocsr().astype(np.float32)
     n = adj.shape[0]
