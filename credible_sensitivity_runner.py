@@ -2,7 +2,7 @@ import argparse
 import csv
 import json
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -74,7 +74,7 @@ def build_centered_grid(center: float, step: float, points: int, lower: float, u
     return ordered
 
 
-def load_paper_defaults(dataset: str) -> Dict[str, float | int | str]:
+def load_paper_defaults(dataset: str) -> Dict[str, Union[float, int, str]]:
     ablation_path = PAPER_RESULTS_DIR / f"{dataset}_ablation_fast.json"
     if not ablation_path.exists():
         late_sem = 0.06 if dataset == "ACM" else 0.18
@@ -280,7 +280,7 @@ def distance_aware_topk_with_overrides(
     art: credible.DatasetArtifacts,
     *,
     use_one_hop_discount: bool = True,
-    overrides: Dict[str, float] | None = None,
+    overrides: Optional[Dict[str, float]] = None,
 ) -> List[int]:
     cfg = default_discount_config(art.bundle.name)
     if overrides:
@@ -556,7 +556,7 @@ def apply_fixed_refine_scores(
     baselines: Dict[str, np.ndarray],
     semantic_graph: sp.csr_matrix,
     refine_meta: Dict[str, object],
-) -> Tuple[np.ndarray, Dict[str, float | str]]:
+) -> Tuple[np.ndarray, Dict[str, Union[float, str]]]:
     hcf = base.minmax_scale(fused_scores)
     pagerank = base.minmax_scale(baselines["PageRank"])
     degree = base.minmax_scale(baselines["Degree"])
@@ -650,7 +650,7 @@ def render_study_plot(
     study_name: str,
     param_name: str,
     results: List[Dict[str, object]],
-    metric_specs: List[Tuple[str, Tuple[str, str]]] | None = None,
+    metric_specs: Optional[List[Tuple[str, Tuple[str, str]]]] = None,
 ) -> None:
     plot_metrics = metric_specs if metric_specs is not None else RANKING_PLOT_METRICS
     x = [float(item[param_name]) for item in results]

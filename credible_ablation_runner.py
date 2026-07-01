@@ -98,7 +98,7 @@ def concat_hidden_fusion_scores(
     target: np.ndarray,
     train_idx: np.ndarray,
     ridge: float = 1e-3,
-) -> Tuple[np.ndarray, Dict[str, float | str]]:
+) -> Tuple[np.ndarray, Dict[str, object]]:
     x = np.concatenate([z_topo, z_sem], axis=1).astype(np.float64)
     x_train = x[train_idx]
     mean = x_train.mean(axis=0, keepdims=True)
@@ -167,7 +167,7 @@ def train_variant_scores(
     force_cpu: bool,
     use_semantic_view: bool,
     align_mode: str,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, float | str]]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, object]]:
     credible.set_seed()
     bundle = art.bundle
     device = credible.get_device(force_cpu=force_cpu)

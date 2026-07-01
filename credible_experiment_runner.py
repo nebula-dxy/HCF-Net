@@ -6,7 +6,7 @@ import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -391,7 +391,7 @@ def choose_final_scores(
     target: np.ndarray,
     val_idx: np.ndarray,
     min_semantic_weight: float = 0.0,
-) -> Tuple[np.ndarray, Dict[str, float | str]]:
+) -> Tuple[np.ndarray, Dict[str, Union[float, str]]]:
     topo = base.minmax_scale(topo_scores)
     sem = base.minmax_scale(sem_scores)
     candidates = []
@@ -406,7 +406,7 @@ def choose_final_scores(
         candidates.append((tag, pred, sem_w, topo_w))
     best_score = -float("inf")
     best_pred = candidates[0][1]
-    best_meta: Dict[str, float | str] = {
+    best_meta: Dict[str, Union[float, str]] = {
         "score_name": candidates[0][0],
         "topo_weight": candidates[0][3],
         "semantic_weight": candidates[0][2],
@@ -430,7 +430,7 @@ def refine_hcf_scores(
     semantic_graph: sp.csr_matrix,
     target: Optional[np.ndarray] = None,
     val_idx: Optional[np.ndarray] = None,
-) -> Tuple[np.ndarray, Dict[str, float | str]]:
+) -> Tuple[np.ndarray, Dict[str, Union[float, str]]]:
     del dataset_name, semantic_graph, target, val_idx
     hcf = base.minmax_scale(hcf_scores)
     return hcf, {"refine_name": "identity", "hcf_weight": 1.0}

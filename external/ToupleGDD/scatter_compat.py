@@ -1,7 +1,9 @@
+from typing import Optional
+
 import torch
 
 
-def _infer_dim_size(index: torch.Tensor, dim_size: int | None) -> int:
+def _infer_dim_size(index: torch.Tensor, dim_size: Optional[int]) -> int:
     if dim_size is not None:
         return dim_size
     if index.numel() == 0:
@@ -9,7 +11,7 @@ def _infer_dim_size(index: torch.Tensor, dim_size: int | None) -> int:
     return int(index.max().item()) + 1
 
 
-def scatter_add(src: torch.Tensor, index: torch.Tensor, dim: int = 0, dim_size: int | None = None) -> torch.Tensor:
+def scatter_add(src: torch.Tensor, index: torch.Tensor, dim: int = 0, dim_size: Optional[int] = None) -> torch.Tensor:
     if dim != 0:
         raise NotImplementedError("scatter_add fallback only supports dim=0")
     dim_size = _infer_dim_size(index, dim_size)
@@ -20,7 +22,7 @@ def scatter_add(src: torch.Tensor, index: torch.Tensor, dim: int = 0, dim_size: 
     return out
 
 
-def scatter_mean(src: torch.Tensor, index: torch.Tensor, dim: int = 0, dim_size: int | None = None) -> torch.Tensor:
+def scatter_mean(src: torch.Tensor, index: torch.Tensor, dim: int = 0, dim_size: Optional[int] = None) -> torch.Tensor:
     out = scatter_add(src, index, dim=dim, dim_size=dim_size)
     dim_size = out.shape[0]
     count = torch.zeros(dim_size, dtype=src.dtype, device=src.device)
@@ -32,7 +34,7 @@ def scatter_mean(src: torch.Tensor, index: torch.Tensor, dim: int = 0, dim_size:
     return out / count
 
 
-def scatter_max(src: torch.Tensor, index: torch.Tensor, dim: int = 0, dim_size: int | None = None):
+def scatter_max(src: torch.Tensor, index: torch.Tensor, dim: int = 0, dim_size: Optional[int] = None):
     if dim != 0:
         raise NotImplementedError("scatter_max fallback only supports dim=0")
     dim_size = _infer_dim_size(index, dim_size)

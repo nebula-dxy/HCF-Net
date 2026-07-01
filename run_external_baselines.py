@@ -23,7 +23,25 @@ def run(cmd: Sequence[str], dry_run: bool = False) -> None:
     print("RUN", " ".join(str(c) for c in cmd))
     if dry_run:
         return
-    subprocess.run(cmd, cwd=ROOT, check=True)
+    completed = subprocess.run(
+        cmd,
+        cwd=ROOT,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if completed.stdout:
+        print(completed.stdout)
+    if completed.returncode != 0:
+        if completed.stderr:
+            print(completed.stderr, file=sys.stderr)
+        raise subprocess.CalledProcessError(
+            completed.returncode,
+            cmd,
+            output=completed.stdout,
+            stderr=completed.stderr,
+        )
 
 
 def runtime_output_path(method: str, dataset: str) -> Path:

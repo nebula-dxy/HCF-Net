@@ -3,7 +3,7 @@ import math
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -655,11 +655,11 @@ def select_fusion_weight(
     sem_scores: np.ndarray,
     target: np.ndarray,
     val_idx: np.ndarray,
-) -> Tuple[np.ndarray, Dict[str, float | str]]:
+) -> Tuple[np.ndarray, Dict[str, Union[float, str]]]:
     topo = minmax_scale(topo_scores)
     sem = minmax_scale(sem_scores)
     best_score = -float("inf")
-    best_meta: Dict[str, float | str] = {"score_name": "topo_only", "semantic_weight": 0.0}
+    best_meta: Dict[str, Union[float, str]] = {"score_name": "topo_only", "semantic_weight": 0.0}
     best_fused = topo.copy()
     for alpha in [0.00, 0.02, 0.05, 0.08, 0.10, 0.12, 0.15, 0.20]:
         fused = minmax_scale(topo + alpha * sem)
@@ -677,7 +677,7 @@ def select_final_hcf_score(
     model_out: Dict[str, np.ndarray],
     baselines: Dict[str, np.ndarray],
     val_idx: np.ndarray,
-) -> Tuple[np.ndarray, Dict[str, float | str]]:
+) -> Tuple[np.ndarray, Dict[str, Union[float, str]]]:
     pure_hcf, pure_meta = select_fusion_weight(
         model_out["topo_scores"],
         model_out["sem_scores"],
@@ -766,7 +766,7 @@ def select_hcf_seed_set(
     communities: np.ndarray,
     baselines: Dict[str, np.ndarray],
     diffusion_cfg: Dict[str, float],
-) -> Tuple[List[int], Dict[str, float | str]]:
+) -> Tuple[List[int], Dict[str, Union[float, str]]]:
     topo = minmax_scale(topo_scores)
     sem = minmax_scale(sem_scores)
     fused = minmax_scale(hcf_scores)
@@ -790,7 +790,7 @@ def select_hcf_seed_set(
     si = SISimulation(graph, beta=float(diffusion_cfg["si_beta"]))
 
     best_score = -float("inf")
-    best_meta: Dict[str, float | str] = {}
+    best_meta: Dict[str, Union[float, str]] = {}
     best_seeds: List[int] = []
 
     if bundle.name == "ACM":

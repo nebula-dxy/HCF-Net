@@ -50,7 +50,7 @@ def marker_positions(length: int) -> List[int]:
     return sorted({min(length - 1, idx) for idx in base})
 
 
-def try_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+def try_font(size: int, bold: bool = False):
     candidates = []
     if bold:
         candidates.extend(["arialbd.ttf", "DejaVuSans-Bold.ttf"])

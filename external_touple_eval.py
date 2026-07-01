@@ -5,7 +5,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Dict, List, Tuple
+from typing import Dict, List, Set, Tuple
 
 import numpy as np
 import scipy.sparse as sp
@@ -60,7 +60,7 @@ def ensure_touple_graph(bundle: er.DatasetBundle) -> Tuple[Path, np.ndarray]:
     return edge_path, active_nodes
 
 
-def latest_new_run_dir(before: set[str]) -> Path:
+def latest_new_run_dir(before: Set[str]) -> Path:
     candidates = [p for p in TOUPLE_DIR.iterdir() if p.is_dir() and p.name not in before]
     if not candidates:
         raise RuntimeError("Could not locate ToupleGDD output directory after training.")

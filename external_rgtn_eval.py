@@ -166,7 +166,9 @@ def train_rgtn(dataset_name: str) -> Tuple[np.ndarray, Dict[str, float], Dict[st
         "relations": float(rel_num),
         "edge_count": float(graph.number_of_edges()),
     }
-    return pred_scores, metrics | metadata, artifacts
+    merged = dict(metrics)
+    merged.update(metadata)
+    return pred_scores, merged, artifacts
 
 
 def update_summary(dataset_name: str, method_name: str, metrics: Dict[str, float]) -> None:
