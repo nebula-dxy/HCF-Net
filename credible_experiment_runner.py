@@ -395,11 +395,16 @@ def choose_final_scores(
     target: np.ndarray,
     val_idx: np.ndarray,
     min_semantic_weight: float = 0.0,
+    art: Optional[DatasetArtifacts] = None,
+    optimize_diffusion: bool = False,
 ) -> Tuple[np.ndarray, Dict[str, Union[float, str]]]:
     topo = base.minmax_scale(topo_scores)
     sem = base.minmax_scale(sem_scores)
     candidates = []
-    for sem_w in [0.0, 0.06, 0.10, 0.14, 0.18, 0.24, 0.30, 0.36, 0.42]:
+    semantic_grid = [0.0, 0.06, 0.10, 0.14, 0.18, 0.24, 0.30, 0.36, 0.42]
+    if optimize_diffusion:
+        semantic_grid = [0.12, 0.18, 0.24, 0.30, 0.36, 0.42]
+    for sem_w in semantic_grid:
         if sem_w + 1e-12 < min_semantic_weight:
             continue
         topo_w = 1.0 - sem_w
@@ -417,6 +422,14 @@ def choose_final_scores(
     }
     for score_name, pred, sem_w, topo_w in candidates:
         score = ranking_quality(target, pred, val_idx)
+        if optimize_diffusion and art is not None:
+            seeds = hcf_diverse_topk(pred, art)
+            weighted_graph = nx.from_scipy_sparse_array(art.weighted_topo)
+            sir = SemanticSIRSimulation(weighted_graph, beta=float(art.diffusion_cfg["sir_beta"]), gamma=float(art.diffusion_cfg["sir_gamma"]))
+            si = SemanticSISimulation(weighted_graph, beta=float(art.diffusion_cfg["si_beta"]))
+            sir_score = float(average_curve(sir, seeds, runs=3, t_steps=20)[-1])
+            si_score = float(average_curve(si, seeds, runs=3, t_steps=20)[-1])
+            score += 0.80 * sir_score + 0.45 * si_score
         if score > best_score:
             best_score = score
             best_pred = pred
@@ -424,6 +437,7 @@ def choose_final_scores(
                 "score_name": score_name,
                 "topo_weight": topo_w,
                 "semantic_weight": sem_w,
+                "selection_score": score,
             }
     return best_pred, best_meta
 
@@ -850,7 +864,16 @@ def train_one(
     topo_np = topo_score[target_nodes].detach().cpu().numpy()
     sem_np = sem_score[target_nodes].detach().cpu().numpy()
     baselines = {k: base.minmax_scale(v) for k, v in base.compute_baseline_scores(bundle.adjacency).items()}
-    hcf_scores, meta = choose_final_scores(topo_np, sem_np, eval_target, bundle.val_idx, min_semantic_weight=0.06)
+    min_semantic_weight = 0.06 if ranking_target is None else 0.18
+    hcf_scores, meta = choose_final_scores(
+        topo_np,
+        sem_np,
+        eval_target,
+        bundle.val_idx,
+        min_semantic_weight=min_semantic_weight,
+        art=art,
+        optimize_diffusion=ranking_target is not None,
+    )
     hcf_scores, refine_meta = refine_hcf_scores(name, hcf_scores, art.semantic_graph, eval_target, bundle.val_idx)
 
     method_scores = {"HCF-Net": hcf_scores}
