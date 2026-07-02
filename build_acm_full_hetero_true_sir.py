@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 import credible_experiment_runner as credible
+import experiment_runner as base
 
 
 ROOT = Path(__file__).resolve().parent
@@ -17,11 +18,7 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def build_weighted_full_hetero_graph() -> Tuple[nx.Graph, List[List[Tuple[int, float]]], np.ndarray, Dict[str, float]]:
-    payload = torch.load(
-        ROOT / "external_prepared" / "ACM" / "acm_nie.pt",
-        map_location="cpu",
-        weights_only=False,
-    )
+    payload = base.safe_torch_load(ROOT / "external_prepared" / "ACM" / "acm_nie.pt")
     num_nodes = int(payload["num_nodes"])
     target_count = int(payload["target_count"])
     features = np.asarray(payload["semantic_features"], dtype=np.float32)

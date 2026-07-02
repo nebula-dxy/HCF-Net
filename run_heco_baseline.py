@@ -234,11 +234,7 @@ class SampledContrast(nn.Module):
 def build_inputs(name: str) -> Tuple[credible.DatasetArtifacts, List[torch.Tensor], List[sp.csr_matrix], List[List[np.ndarray]], List[np.ndarray]]:
     art = credible.prepare_dataset(name)
     bundle = art.bundle
-    payload = torch.load(
-        ROOT / "external_prepared" / name / f"{name.lower()}_nie.pt",
-        map_location="cpu",
-        weights_only=False,
-    )
+    payload = base.safe_torch_load(ROOT / "external_prepared" / name / f"{name.lower()}_nie.pt")
     offsets = global_offsets(name)
     full_features = row_normalize(np.asarray(payload["features"], dtype=np.float32))
 

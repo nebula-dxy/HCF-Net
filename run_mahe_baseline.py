@@ -11,6 +11,7 @@ import gensim
 import numpy as np
 import tensorflow as tf
 import torch
+import experiment_runner as base
 
 ROOT = Path(__file__).resolve().parent
 MAHE_CODE = ROOT / "external" / "MAHE-IM" / "code"
@@ -67,7 +68,7 @@ def stringify_pairs(pairs, src_prefix, dst_prefix):
 
 
 def load_local_relations(dataset: str):
-    payload = torch.load(ROOT / "external_prepared" / dataset / f"{dataset.lower()}_nie.pt", map_location="cpu", weights_only=False)
+    payload = base.safe_torch_load(ROOT / "external_prepared" / dataset / f"{dataset.lower()}_nie.pt")
     src_all = np.asarray(payload["edges"][0]).reshape(-1)
     dst_all = np.asarray(payload["edges"][1]).reshape(-1)
     edge_types = np.asarray(payload["edge_types"]).reshape(-1)
@@ -202,7 +203,7 @@ def rank_from_embeddings(workdir: Path, relevancy: float):
 
 
 def ranking_to_pred(dataset: str, ranking):
-    payload = torch.load(ROOT / "external_prepared" / dataset / f"{dataset.lower()}_nie.pt", map_location="cpu", weights_only=False)
+    payload = base.safe_torch_load(ROOT / "external_prepared" / dataset / f"{dataset.lower()}_nie.pt")
     target_count = int(payload["target_count"])
     pred = np.zeros(target_count, dtype=np.float32)
     max_score = float(len(ranking) + 1)

@@ -123,6 +123,13 @@ def to_torch_sparse(adj: sp.csr_matrix) -> torch.Tensor:
     return torch.sparse_coo_tensor(indices, values, size=adj.shape).coalesce()
 
 
+def safe_torch_load(path: Path):
+    try:
+        return torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location="cpu")
+
+
 def _default_split(n: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     idx = np.arange(n)
     rng = np.random.default_rng(SEED)
@@ -229,7 +236,7 @@ def load_attribute_hetero_dataset(name: str) -> DatasetBundle:
     if not pt_path.exists():
         return base_bundle
 
-    payload = torch.load(pt_path, map_location="cpu", weights_only=False)
+    payload = safe_torch_load(pt_path)
     num_nodes = int(payload["num_nodes"])
     rows = np.asarray(payload["edges"][0], dtype=np.int64).reshape(-1)
     cols = np.asarray(payload["edges"][1], dtype=np.int64).reshape(-1)
