@@ -55,79 +55,30 @@ def runtime_output_path(method: str, dataset: str) -> Path:
 
 
 def run_geni(dataset: str, epochs: int, gpu: int, dry_run: bool = False) -> None:
-    tag = f"{dataset.lower()}_geni"
     cmd = [
         str(PYTHON_EXE),
-        str(script_path("external", "RGTN-NIE", "GENI", "geni_batch_train.py")),
-        "--dataset", f"CUSTOM_{dataset}_rel",
-        "--data_path", prepared_path(dataset),
-        "--cross-num", "1",
-        "--gpu", str(gpu),
-        "--epochs", str(epochs),
-        "--batch-size", "1024",
-        "--num-workers", "0",
-        "--num-hidden", "16" if dataset == "Yelp" else "8",
-        "--num-heads", "8",
-        "--num-out-heads", "4",
-        "--pred-dim", "32" if dataset == "Yelp" else "16",
-        "--save-path", f"{tag}_checkpoint.pt",
+        str(script_path("external_geni_eval.py")),
+        "--datasets", dataset,
     ]
-    if dataset != "Yelp":
-        cmd.append("--spm")
-    else:
-        cmd.extend(["--no-scale", "--patience", "20"])
-    run(cmd, dry_run=dry_run, cwd=script_path("external", "RGTN-NIE"))
+    run(cmd, dry_run=dry_run, cwd=ROOT)
 
 
 def run_rgtn(dataset: str, epochs: int, gpu: int, dry_run: bool = False) -> None:
-    tag = f"{dataset.lower()}_rgtn"
     cmd = [
         str(PYTHON_EXE),
-        str(script_path("external", "RGTN-NIE", "two_branch", "two_branch_batch_train.py")),
-        "--dataset", f"CUSTOM_{dataset}_two",
-        "--data_path", prepared_path(dataset),
-        "--cross-num", "1",
-        "--gpu", str(gpu),
-        "--epochs", str(epochs),
-        "--batch-size", "1024",
-        "--num-workers", "0",
-        "--loss-lambda", "0.7",
-        "--loss-alpha", "0.6",
-        "--list-num", "100",
-        "--residual",
-        "--norm",
-        "--num-hidden", "8",
-        "--num-heads", "8",
-        "--num-out-heads", "8",
-        "--save-path", f"{tag}_checkpoint.pt",
-        "--spm",
-        "--pred-dim", "16",
+        str(script_path("external_rgtn_eval.py")),
+        "--datasets", dataset,
     ]
-    run(cmd, dry_run=dry_run, cwd=script_path("external", "RGTN-NIE"))
+    run(cmd, dry_run=dry_run, cwd=ROOT)
 
 
 def run_easing(dataset: str, epochs: int, gpu: int, dry_run: bool = False) -> None:
-    tag = f"{dataset.lower()}_easing"
     cmd = [
         str(PYTHON_EXE),
-        str(script_path("external", "EASING", "easing", "main_easing.py")),
-        "--dataset", f"CUSTOM_{dataset}",
-        "--data_path", str(ROOT),
-        "--graph_data", str(script_path("external_prepared", dataset, f"{dataset.lower()}_nie.pt")),
-        "--semantic_data", "placeholder.pk",
-        "--structure_data", "placeholder.pk",
-        "--cross-num", "1",
-        "--gpu", str(gpu),
-        "--epochs", str(epochs),
-        "--train_num", "1.0",
-        "--samp_ssl", "5",
-        "--unc_layers", "1",
-        "--save-path", f"{tag}_checkpoint.pt",
-        "--early-stop",
-        "--patience", "60",
-        "--min-epoch", "10",
+        str(script_path("external_easing_eval.py")),
+        "--datasets", dataset,
     ]
-    run(cmd, dry_run=dry_run, cwd=script_path("external", "EASING"))
+    run(cmd, dry_run=dry_run, cwd=ROOT)
 
 
 def main() -> None:

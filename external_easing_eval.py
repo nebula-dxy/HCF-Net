@@ -1,4 +1,5 @@
 import json
+import argparse
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -291,4 +292,7 @@ def run_all(datasets: Iterable[str]) -> None:
 
 
 if __name__ == "__main__":
-    run_all(["ACM", "DBLP", "Yelp"])
+    parser = argparse.ArgumentParser(description="Run wrapped EASING evaluation")
+    parser.add_argument("--datasets", nargs="+", default=["ACM", "DBLP", "Yelp"])
+    args = parser.parse_args()
+    run_all(args.datasets)

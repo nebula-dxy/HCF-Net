@@ -7,19 +7,19 @@ from typing import Dict, Iterable, Tuple
 
 import dgl
 import numpy as np
-import scipy.sparse as sp
 import torch
+import torch.nn.functional as F
 
 import experiment_runner as er
 
 
 ROOT = Path(__file__).resolve().parent
-RGTN_DIR = ROOT / "external" / "RGTN-NIE"
+GENI_DIR = ROOT / "external" / "RGTN-NIE"
 RESULTS_DIR = ROOT / "results_hcfnet"
 
-sys.path.insert(0, str(RGTN_DIR))
+sys.path.insert(0, str(GENI_DIR))
 
-from two_branch.model import rgtn  # type: ignore  # noqa: E402
+from GENI.geni_batch import GENIB  # type: ignore  # noqa: E402
 
 
 def build_relation_graph(bundle: er.DatasetBundle) -> Tuple[dgl.DGLGraph, torch.Tensor, int]:
@@ -29,15 +29,6 @@ def build_relation_graph(bundle: er.DatasetBundle) -> Tuple[dgl.DGLGraph, torch.
     edge_types = torch.zeros(coo.nnz, dtype=torch.long)
     graph = dgl.graph((src, dst), num_nodes=bundle.adjacency.shape[0])
     return graph, edge_types, 1
-
-
-def build_struct_features(bundle: er.DatasetBundle) -> np.ndarray:
-    adj_norm = er.sym_norm_sp(bundle.adjacency)
-    propagated = adj_norm @ bundle.features
-    degree = np.asarray(bundle.adjacency.sum(axis=1)).reshape(-1, 1).astype(np.float32)
-    degree = degree / (degree.max() + 1e-8)
-    struct = np.concatenate([propagated.astype(np.float32), degree], axis=1)
-    return er.row_normalize_dense(struct)
 
 
 def get_epochs(dataset_name: str) -> int:
@@ -50,24 +41,20 @@ def get_epochs(dataset_name: str) -> int:
 
 def get_args() -> SimpleNamespace:
     return SimpleNamespace(
-        num_heads=4,
+        num_heads=8,
         num_out_heads=4,
         num_layers=2,
-        num_hidden=16,
-        residual=False,
-        feat_drop=0.05,
-        in_drop=0.15,
-        attn_drop=0.15,
-        lr=0.003,
-        weight_decay=5e-4,
+        num_hidden=8,
+        residual=True,
+        in_drop=0.25,
+        attn_drop=0.20,
         negative_slope=0.2,
         scale=False,
-        pred_dim=12,
-        loss_lambda=0.45,
-        norm=False,
-        edge_mode="MUL",
-        loss_alpha=0.18,
-        list_num=40,
+        pred_dim=16,
+        lr=0.0015,
+        weight_decay=5e-4,
+        batch_size=1024,
+        num_workers=0,
     )
 
 
@@ -83,7 +70,7 @@ def composite_score(target: np.ndarray, pred: np.ndarray, idx: np.ndarray) -> fl
     return float(ndcg + 0.40 * spear)
 
 
-def train_rgtn(dataset_name: str) -> Tuple[np.ndarray, Dict[str, float], Dict[str, list]]:
+def train_geni(dataset_name: str) -> Tuple[np.ndarray, Dict[str, float], Dict[str, list]]:
     er.set_seed(er.SEED)
     bundle = er.load_dataset(dataset_name)
     communities = er.build_communities(bundle.adjacency)
@@ -94,32 +81,68 @@ def train_rgtn(dataset_name: str) -> Tuple[np.ndarray, Dict[str, float], Dict[st
     graph = dgl.add_self_loop(graph)
     edge_types = torch.cat([edge_types, torch.full((graph.number_of_nodes(),), rel_num, dtype=torch.long)], dim=0)
     rel_num += 1
-
-    content_feat = torch.tensor(bundle.features, dtype=torch.float32)
-    struct_feat = torch.tensor(build_struct_features(bundle), dtype=torch.float32)
-    labels = torch.tensor(rank_target, dtype=torch.float32)
-
+    graph.edata["etypes"] = edge_types
     centrality = torch.log(torch.tensor(np.asarray(bundle.adjacency.sum(axis=1)).reshape(-1), dtype=torch.float32) + 1e-4)
+    graph.ndata["centrality"] = centrality
+    features = torch.tensor(bundle.features, dtype=torch.float32)
+    labels = torch.tensor(rank_target, dtype=torch.float32).unsqueeze(-1)
+    graph.ndata["features"] = features
+    graph.ndata["labels"] = labels
+
     args = get_args()
-    model = rgtn(args, graph, rel_num, struct_feat.shape[1], content_feat.shape[1], centrality, torch.nn.MSELoss())
+    heads = ([args.num_heads] * args.num_layers) + [args.num_out_heads]
+    model = GENIB(
+        args.num_layers,
+        rel_num,
+        args.pred_dim,
+        features.shape[1],
+        args.num_hidden,
+        heads,
+        F.elu,
+        args.in_drop,
+        args.attn_drop,
+        args.negative_slope,
+        args.residual,
+        args.scale,
+    )
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    loss_fcn = torch.nn.MSELoss()
 
     best_state = clone_state(model)
     best_val = -float("inf")
     patience = 15
     stale = 0
 
+    sampler = dgl.dataloading.MultiLayerFullNeighborSampler(args.num_layers)
+    loader_cls = getattr(dgl.dataloading, "NodeDataLoader", None)
+    if loader_cls is None:
+        loader_cls = dgl.dataloading.DataLoader
+    dataloader = loader_cls(
+        graph,
+        bundle.train_idx,
+        sampler,
+        batch_size=args.batch_size,
+        shuffle=True,
+        drop_last=False,
+        num_workers=args.num_workers,
+    )
+
     for epoch in range(get_epochs(dataset_name)):
         model.train()
-        logits, loss = model(struct_feat, content_feat, edge_types, labels, bundle.train_idx)
-        optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=3.0)
-        optimizer.step()
+        for input_nodes, output_nodes, blocks in dataloader:
+            blocks = [block.int() for block in blocks]
+            batch_inputs = blocks[0].srcdata["features"]
+            batch_labels = blocks[-1].dstdata["labels"]
+            batch_pred = model(blocks, batch_inputs)
+            loss = loss_fcn(batch_pred, batch_labels)
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=3.0)
+            optimizer.step()
 
         model.eval()
         with torch.no_grad():
-            pred = model(struct_feat, content_feat, edge_types).squeeze(-1).cpu().numpy()
+            pred = model.inference(graph, features, args.batch_size, args.num_workers, torch.device("cpu")).view(-1).cpu().numpy()
         pred = er.minmax_scale(pred)
         val_score = composite_score(rank_target, pred, bundle.val_idx)
         if val_score > best_val:
@@ -133,8 +156,8 @@ def train_rgtn(dataset_name: str) -> Tuple[np.ndarray, Dict[str, float], Dict[st
             val_ndcg = er.ndcg_score(rank_target[bundle.val_idx].reshape(1, -1), pred[bundle.val_idx].reshape(1, -1), k=min(100, len(bundle.val_idx)))
             val_spear = er.spearmanr(rank_target[bundle.val_idx], pred[bundle.val_idx]).statistic
             print(
-                f"[RGTN:{dataset_name}] epoch={epoch:03d} "
-                f"loss={loss.item():.4f} val_ndcg={val_ndcg:.4f} val_spearman={val_spear:.4f}"
+                f"[GENI:{dataset_name}] epoch={epoch:03d} "
+                f"val_ndcg={val_ndcg:.4f} val_spearman={val_spear:.4f}"
             )
 
         if stale >= patience:
@@ -143,7 +166,7 @@ def train_rgtn(dataset_name: str) -> Tuple[np.ndarray, Dict[str, float], Dict[st
     model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad():
-        pred_scores = model(struct_feat, content_feat, edge_types).squeeze(-1).cpu().numpy()
+        pred_scores = model.inference(graph, features, args.batch_size, args.num_workers, torch.device("cpu")).view(-1).cpu().numpy()
     pred_scores = er.minmax_scale(pred_scores)
 
     metrics = er.evaluate_rankings(rank_target, pred_scores, bundle.test_idx, k=100)
@@ -193,8 +216,8 @@ def update_summary(dataset_name: str, method_name: str, metrics: Dict[str, float
 
 def run_all(datasets: Iterable[str]) -> None:
     for dataset_name in datasets:
-        method_name = "RGTN"
-        scores, metrics, artifacts = train_rgtn(dataset_name)
+        method_name = "GENI"
+        scores, metrics, artifacts = train_geni(dataset_name)
         out = {
             "dataset": dataset_name,
             "method": method_name,
@@ -209,7 +232,7 @@ def run_all(datasets: Iterable[str]) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run wrapped RGTN evaluation")
+    parser = argparse.ArgumentParser(description="Run wrapped GENI evaluation")
     parser.add_argument("--datasets", nargs="+", default=["ACM", "DBLP", "Yelp"])
     args = parser.parse_args()
     run_all(args.datasets)
