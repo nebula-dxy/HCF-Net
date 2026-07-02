@@ -19,13 +19,13 @@ def prepared_path(dataset: str) -> str:
     return str(ROOT / "external_prepared" / dataset / f"{dataset.lower()}_nie.pt")
 
 
-def run(cmd: Sequence[str], dry_run: bool = False) -> None:
+def run(cmd: Sequence[str], dry_run: bool = False, cwd: Path = ROOT) -> None:
     print("RUN", " ".join(str(c) for c in cmd))
     if dry_run:
         return
     completed = subprocess.run(
         cmd,
-        cwd=ROOT,
+        cwd=cwd,
         check=False,
         text=True,
         stdout=subprocess.PIPE,
@@ -76,7 +76,7 @@ def run_geni(dataset: str, epochs: int, gpu: int, dry_run: bool = False) -> None
         cmd.append("--spm")
     else:
         cmd.extend(["--no-scale", "--patience", "20"])
-    run(cmd, dry_run=dry_run)
+    run(cmd, dry_run=dry_run, cwd=script_path("external", "RGTN-NIE"))
 
 
 def run_rgtn(dataset: str, epochs: int, gpu: int, dry_run: bool = False) -> None:
@@ -103,7 +103,7 @@ def run_rgtn(dataset: str, epochs: int, gpu: int, dry_run: bool = False) -> None
         "--spm",
         "--pred-dim", "16",
     ]
-    run(cmd, dry_run=dry_run)
+    run(cmd, dry_run=dry_run, cwd=script_path("external", "RGTN-NIE"))
 
 
 def run_easing(dataset: str, epochs: int, gpu: int, dry_run: bool = False) -> None:
@@ -127,7 +127,7 @@ def run_easing(dataset: str, epochs: int, gpu: int, dry_run: bool = False) -> No
         "--patience", "60",
         "--min-epoch", "10",
     ]
-    run(cmd, dry_run=dry_run)
+    run(cmd, dry_run=dry_run, cwd=script_path("external", "EASING"))
 
 
 def main() -> None:

@@ -14,10 +14,16 @@ rootPath = os.path.split(curPath)[0]
 PathProject = os.path.split(rootPath)[0]
 sys.path.append(rootPath)
 sys.path.append(PathProject)
+sys.path.append(os.path.join(rootPath, "utils"))
 
-from utils.EarlyStopping import EarlyStopping_simple
-from utils.utils import set_random_seed, load_data, rank_evaluate, get_centrality, get_relative_entropy
-from utils.metric import overlap
+try:
+    from utils.EarlyStopping import EarlyStopping_simple
+    from utils.utils import set_random_seed, load_data, rank_evaluate, get_centrality, get_relative_entropy
+    from utils.metric import overlap
+except ModuleNotFoundError:
+    from EarlyStopping import EarlyStopping_simple
+    from utils import set_random_seed, load_data, rank_evaluate, get_centrality, get_relative_entropy
+    from metric import overlap
 from easing.model import list_loss, Easing
 
 def main(args):

@@ -14,10 +14,16 @@ rootPath = os.path.split(curPath)[0]
 PathProject = os.path.split(rootPath)[0]
 sys.path.append(rootPath)
 sys.path.append(PathProject)
+sys.path.append(os.path.join(rootPath, "utils"))
 
-from utils.EarlyStopping import EarlyStopping_simple
-from utils.utils import set_random_seed, load_data, get_rank_metrics, rank_evaluate, get_centrality
-from utils.metric import overlap, ndcg
+try:
+    from utils.EarlyStopping import EarlyStopping_simple
+    from utils.utils import set_random_seed, load_data, get_rank_metrics, rank_evaluate, get_centrality
+    from utils.metric import overlap, ndcg
+except ModuleNotFoundError:
+    from EarlyStopping import EarlyStopping_simple
+    from utils import set_random_seed, load_data, get_rank_metrics, rank_evaluate, get_centrality
+    from metric import overlap, ndcg
 from two_branch.model import rgtn_b
 
 def build_node_dataloader(*args, **kwargs):

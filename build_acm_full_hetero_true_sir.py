@@ -9,6 +9,7 @@ from typing import Dict, List, Tuple
 
 import networkx as nx
 import numpy as np
+import scipy.sparse as sp
 import torch
 
 import credible_experiment_runner as credible
@@ -99,6 +100,43 @@ def simulate_target_coverage(neighbors: List[List[Tuple[int, float]]], target_ma
     return float(covered.sum() / max(float(target_mask.sum()), 1.0))
 
 
+def mean_field_target_coverage_scores(
+    weighted_adj: sp.csr_matrix,
+    target_mask: np.ndarray,
+    beta: float,
+    gamma: float,
+    t_steps: int,
+    batch_size: int = 48,
+) -> np.ndarray:
+    adj = weighted_adj.tocsr().astype(np.float32)
+    n = adj.shape[0]
+    target_weight = target_mask.astype(np.float32).reshape(-1, 1)
+    denom = max(float(target_mask.sum()), 1.0)
+    scores = np.zeros(n, dtype=np.float32)
+
+    for start in range(0, n, batch_size):
+        end = min(start + batch_size, n)
+        width = end - start
+        infected = np.zeros((n, width), dtype=np.float32)
+        susceptible = np.ones((n, width), dtype=np.float32)
+        recovered = np.zeros((n, width), dtype=np.float32)
+        local_ids = np.arange(width)
+        infected[start:end, local_ids] = 1.0
+        susceptible[start:end, local_ids] = 0.0
+
+        for _ in range(t_steps):
+            exposure = adj @ infected
+            p_infect = 1.0 - np.power(np.clip(1.0 - beta, 1e-6, 1.0), exposure, dtype=np.float32)
+            new_infected = susceptible * p_infect
+            new_recovered = gamma * infected
+            susceptible = np.clip(susceptible - new_infected, 0.0, 1.0)
+            infected = np.clip(infected + new_infected - new_recovered, 0.0, 1.0)
+            recovered = np.clip(recovered + new_recovered, 0.0, 1.0)
+
+        scores[start:end] = (((infected + recovered) * target_weight).sum(axis=0) / denom).astype(np.float32)
+    return scores
+
+
 def init_worker(neighbors, target_mask, beta: float, gamma: float, runs: int, t_steps: int) -> None:
     global WORK_NEIGHBORS, WORK_TARGET_MASK, WORK_BETA, WORK_GAMMA, WORK_RUNS, WORK_T_STEPS
     WORK_NEIGHBORS = neighbors
@@ -132,6 +170,8 @@ def main() -> None:
     parser.add_argument("--t-steps", type=int, default=20)
     parser.add_argument("--limit", type=int, default=0, help="Only compute the first N target nodes for quick validation; 0 means all")
     parser.add_argument("--workers", type=int, default=0, help="Parallel worker processes; 0 means auto")
+    parser.add_argument("--mode", choices=["mc", "meanfield"], default="mc")
+    parser.add_argument("--beta-scale", type=float, default=1.0, help="Scale sir_beta to reduce saturation")
     args = parser.parse_args()
 
     dataset = "ACM"
@@ -139,6 +179,7 @@ def main() -> None:
     t_steps = args.t_steps
     started = time.perf_counter()
     graph, neighbors, target_mask, cfg = build_weighted_full_hetero_graph()
+    cfg["sir_beta"] = float(np.clip(float(cfg["sir_beta"]) * args.beta_scale, 0.001, 0.25))
     target_count = int(cfg["target_count"])
     limit = target_count if args.limit <= 0 else min(int(args.limit), target_count)
     scores = np.zeros(limit, dtype=np.float32)
@@ -147,9 +188,21 @@ def main() -> None:
 
     print(
         f"start ACM full hetero SIR: target_count={target_count} limit={limit} "
-        f"runs={runs} t_steps={t_steps} workers={workers}"
+        f"runs={runs} t_steps={t_steps} workers={workers} mode={args.mode} beta={cfg['sir_beta']:.6f}"
     )
-    if workers <= 1:
+    if args.mode == "meanfield":
+        weighted_adj = nx.to_scipy_sparse_array(graph, nodelist=range(int(cfg["num_nodes"])), weight="weight", dtype=np.float32).tocsr()
+        full_scores = mean_field_target_coverage_scores(
+            weighted_adj,
+            target_mask,
+            float(cfg["sir_beta"]),
+            float(cfg["sir_gamma"]),
+            t_steps,
+            batch_size=64,
+        )
+        scores = full_scores[:limit].astype(np.float32)
+        print(f"meanfield complete: elapsed={time.perf_counter()-started:.1f}s")
+    elif workers <= 1:
         init_worker(neighbors, target_mask, float(cfg["sir_beta"]), float(cfg["sir_gamma"]), runs, t_steps)
         for node in range(limit):
             _, score = score_one_seed(node)
@@ -168,7 +221,7 @@ def main() -> None:
                     print(f"done={finished}/{limit} latest_node={node+1} score={score:.6f} elapsed={time.perf_counter()-started:.1f}s")
 
     random.setstate(state)
-    suffix = f"t{t_steps}_runs{runs}" + ("" if limit == target_count else f"_limit{limit}")
+    suffix = f"{args.mode}_t{t_steps}_runs{runs}_beta{args.beta_scale:g}" + ("" if limit == target_count else f"_limit{limit}")
     npy_path = OUT_DIR / f"ACM_true_sir_full_hetero_target_coverage_{suffix}.npy"
     meta_path = OUT_DIR / f"ACM_true_sir_full_hetero_target_coverage_{suffix}_meta.json"
     np.save(npy_path, scores)
@@ -178,6 +231,8 @@ def main() -> None:
         "runs": runs,
         "t_steps": t_steps,
         "computed_target_count": limit,
+        "mode": args.mode,
+        "beta_scale": float(args.beta_scale),
         **cfg,
         "min_score": float(scores.min()),
         "max_score": float(scores.max()),

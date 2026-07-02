@@ -714,6 +714,7 @@ def evaluate_methods(
     method_scores: Dict[str, np.ndarray],
     runs: int = 16,
     t_steps: int = 20,
+    ranking_target: Optional[np.ndarray] = None,
 ) -> Tuple[Dict[str, Dict[str, float]], Dict[str, List[float]], Dict[str, List[float]]]:
     bundle = art.bundle
     weighted_graph = nx.from_scipy_sparse_array(art.weighted_topo)
@@ -722,8 +723,9 @@ def evaluate_methods(
     rows = {}
     sir_curves = {}
     si_curves = {}
+    target = art.rank_target if ranking_target is None else np.asarray(ranking_target, dtype=np.float32)
     for method, scores in method_scores.items():
-        rows[method] = base.evaluate_rankings(art.rank_target, scores, bundle.test_idx, k=100)
+        rows[method] = base.evaluate_rankings(target, scores, bundle.test_idx, k=100)
         seeds = select_method_seeds(method, scores, art)
         sir_curve = average_curve(sir, seeds, runs=runs, t_steps=t_steps)
         si_curve = average_curve(si, seeds, runs=runs, t_steps=t_steps)
@@ -751,11 +753,30 @@ def plot_curve(curves: Dict[str, List[float]], title: str, ylabel: str, save_pat
     plt.close()
 
 
-def train_one(name: str, epochs: int, force_cpu: bool = False) -> Dict[str, Dict[str, float]]:
+def load_ranking_target_override(name: str, true_sir_path: Optional[str]) -> Optional[np.ndarray]:
+    if not true_sir_path:
+        return None
+    path = Path(true_sir_path)
+    if "{dataset}" in str(path):
+        path = Path(str(path).replace("{dataset}", name))
+    if not path.exists():
+        raise FileNotFoundError(f"true SIR target file not found: {path}")
+    values = np.load(path).astype(np.float32).reshape(-1)
+    return base.minmax_scale(values)
+
+
+def train_one(
+    name: str,
+    epochs: int,
+    force_cpu: bool = False,
+    true_sir_path: Optional[str] = None,
+) -> Dict[str, Dict[str, float]]:
     started_at = time.perf_counter()
     set_seed()
     art = prepare_dataset(name)
     bundle = art.bundle
+    ranking_target = load_ranking_target_override(name, true_sir_path)
+    eval_target = art.rank_target if ranking_target is None else ranking_target
     device = get_device(force_cpu=force_cpu)
 
     x_topo = torch.tensor(bundle.full_features, dtype=torch.float32, device=device)
@@ -810,8 +831,8 @@ def train_one(name: str, epochs: int, force_cpu: bool = False) -> Dict[str, Dict
                 base.minmax_scale(topo_val[target_nodes].detach().cpu().numpy())
                 + 0.12 * base.minmax_scale(sem_val[target_nodes].detach().cpu().numpy())
             )
-        ndcg = ndcg_score(art.rank_target[bundle.val_idx].reshape(1, -1), pred[bundle.val_idx].reshape(1, -1), k=min(100, len(bundle.val_idx)))
-        spear = spearmanr(art.rank_target[bundle.val_idx], pred[bundle.val_idx]).statistic
+        ndcg = ndcg_score(eval_target[bundle.val_idx].reshape(1, -1), pred[bundle.val_idx].reshape(1, -1), k=min(100, len(bundle.val_idx)))
+        spear = spearmanr(eval_target[bundle.val_idx], pred[bundle.val_idx]).statistic
         if not np.isfinite(spear):
             spear = 0.0
         score = float(ndcg + 0.55 * spear)
@@ -829,12 +850,12 @@ def train_one(name: str, epochs: int, force_cpu: bool = False) -> Dict[str, Dict
     topo_np = topo_score[target_nodes].detach().cpu().numpy()
     sem_np = sem_score[target_nodes].detach().cpu().numpy()
     baselines = {k: base.minmax_scale(v) for k, v in base.compute_baseline_scores(bundle.adjacency).items()}
-    hcf_scores, meta = choose_final_scores(topo_np, sem_np, art.rank_target, bundle.val_idx, min_semantic_weight=0.06)
-    hcf_scores, refine_meta = refine_hcf_scores(name, hcf_scores, art.semantic_graph, art.rank_target, bundle.val_idx)
+    hcf_scores, meta = choose_final_scores(topo_np, sem_np, eval_target, bundle.val_idx, min_semantic_weight=0.06)
+    hcf_scores, refine_meta = refine_hcf_scores(name, hcf_scores, art.semantic_graph, eval_target, bundle.val_idx)
 
     method_scores = {"HCF-Net": hcf_scores}
     method_scores.update(baselines)
-    rows, sir_curves, si_curves = evaluate_methods(art, method_scores)
+    rows, sir_curves, si_curves = evaluate_methods(art, method_scores, ranking_target=eval_target)
 
     plot_curve(sir_curves, f"{name} Semantic-SIR", "f(t)", RESULTS_DIR / f"{name}_sir.png")
     plot_curve(si_curves, f"{name} Semantic-SI", "f(t)", RESULTS_DIR / f"{name}_si.png")
@@ -848,6 +869,7 @@ def train_one(name: str, epochs: int, force_cpu: bool = False) -> Dict[str, Dict
                 "epochs": epochs,
                 "total_runtime_sec": float(time.perf_counter() - started_at),
                 "diffusion": art.diffusion_cfg,
+                "ranking_target_source": "synthetic_rank_target" if ranking_target is None else str(true_sir_path),
                 "score_fusion": meta,
                 "score_refine": refine_meta,
             },
@@ -863,11 +885,17 @@ def main() -> None:
     parser.add_argument("--datasets", nargs="+", default=["ACM", "DBLP", "Yelp"])
     parser.add_argument("--epochs", type=int, default=160)
     parser.add_argument("--cpu", action="store_true")
+    parser.add_argument("--true-sir-path", type=str, default="", help="Optional .npy path, or pattern containing {dataset}, used as ranking target for fusion/evaluation")
     args = parser.parse_args()
 
     summary = {}
     for dataset in args.datasets:
-        summary[dataset] = train_one(dataset, epochs=args.epochs if dataset != "Yelp" else max(100, args.epochs // 2), force_cpu=args.cpu)
+        summary[dataset] = train_one(
+            dataset,
+            epochs=args.epochs if dataset != "Yelp" else max(100, args.epochs // 2),
+            force_cpu=args.cpu,
+            true_sir_path=args.true_sir_path or None,
+        )
 
     with open(RESULTS_DIR / "summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
