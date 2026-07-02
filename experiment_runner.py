@@ -1,6 +1,7 @@
 import json
 import math
 import random
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
@@ -8,6 +9,7 @@ from typing import Dict, List, Optional, Tuple, Union
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
+import numpy.core as np_core
 import scipy.io as sio
 import scipy.sparse as sp
 import torch
@@ -24,6 +26,11 @@ ROOT = Path(__file__).resolve().parent
 RESULTS_DIR = ROOT / "results_hcfnet"
 RESULTS_DIR.mkdir(exist_ok=True)
 TARGET_VERSION = "v2"
+
+# NumPy 2.x pickles may reference `numpy._core`; alias it for older runtimes.
+sys.modules.setdefault("numpy._core", np_core)
+if hasattr(np_core, "multiarray"):
+    sys.modules.setdefault("numpy._core.multiarray", np_core.multiarray)
 
 SEED = 42
 random.seed(SEED)
