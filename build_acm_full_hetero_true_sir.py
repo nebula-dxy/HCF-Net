@@ -1,7 +1,9 @@
 import json
 import argparse
+import os
 import random
 import time
+from multiprocessing import Pool
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -16,6 +18,14 @@ import experiment_runner as base
 ROOT = Path(__file__).resolve().parent
 OUT_DIR = ROOT / "results_hcfnet_credible" / "true_sir"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+WORK_NEIGHBORS = None
+WORK_TARGET_MASK = None
+WORK_BETA = 0.0
+WORK_GAMMA = 0.0
+WORK_RUNS = 0
+WORK_T_STEPS = 0
 
 
 def build_weighted_full_hetero_graph() -> Tuple[nx.Graph, List[List[Tuple[int, float]]], np.ndarray, Dict[str, float]]:
@@ -89,11 +99,39 @@ def simulate_target_coverage(neighbors: List[List[Tuple[int, float]]], target_ma
     return float(covered.sum() / max(float(target_mask.sum()), 1.0))
 
 
+def init_worker(neighbors, target_mask, beta: float, gamma: float, runs: int, t_steps: int) -> None:
+    global WORK_NEIGHBORS, WORK_TARGET_MASK, WORK_BETA, WORK_GAMMA, WORK_RUNS, WORK_T_STEPS
+    WORK_NEIGHBORS = neighbors
+    WORK_TARGET_MASK = target_mask
+    WORK_BETA = float(beta)
+    WORK_GAMMA = float(gamma)
+    WORK_RUNS = int(runs)
+    WORK_T_STEPS = int(t_steps)
+
+
+def score_one_seed(seed: int) -> Tuple[int, float]:
+    vals = []
+    for run_idx in range(WORK_RUNS):
+        random.seed(credible.SEED + 1000003 * int(seed) + run_idx)
+        vals.append(
+            simulate_target_coverage(
+                WORK_NEIGHBORS,
+                WORK_TARGET_MASK,
+                WORK_BETA,
+                WORK_GAMMA,
+                int(seed),
+                WORK_T_STEPS,
+            )
+        )
+    return int(seed), float(np.mean(vals))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build ACM full heterogeneous SIR true scores")
     parser.add_argument("--runs", type=int, default=8)
     parser.add_argument("--t-steps", type=int, default=20)
     parser.add_argument("--limit", type=int, default=0, help="Only compute the first N target nodes for quick validation; 0 means all")
+    parser.add_argument("--workers", type=int, default=0, help="Parallel worker processes; 0 means auto")
     args = parser.parse_args()
 
     dataset = "ACM"
@@ -105,16 +143,29 @@ def main() -> None:
     limit = target_count if args.limit <= 0 else min(int(args.limit), target_count)
     scores = np.zeros(limit, dtype=np.float32)
     state = random.getstate()
+    workers = int(args.workers) if int(args.workers) > 0 else max(1, min(8, (os.cpu_count() or 1) - 1))
 
-    print(f"start ACM full hetero SIR: target_count={target_count} limit={limit} runs={runs} t_steps={t_steps}")
-    for node in range(limit):
-        vals = []
-        for run_idx in range(runs):
-            random.seed(credible.SEED + run_idx)
-            vals.append(simulate_target_coverage(neighbors, target_mask, float(cfg["sir_beta"]), float(cfg["sir_gamma"]), node, t_steps))
-        scores[node] = float(np.mean(vals))
-        if node % 50 == 0 or node == limit - 1:
-            print(f"node={node+1}/{limit} score={scores[node]:.6f} elapsed={time.perf_counter()-started:.1f}s")
+    print(
+        f"start ACM full hetero SIR: target_count={target_count} limit={limit} "
+        f"runs={runs} t_steps={t_steps} workers={workers}"
+    )
+    if workers <= 1:
+        init_worker(neighbors, target_mask, float(cfg["sir_beta"]), float(cfg["sir_gamma"]), runs, t_steps)
+        for node in range(limit):
+            _, score = score_one_seed(node)
+            scores[node] = score
+            if node % 25 == 0 or node == limit - 1:
+                print(f"node={node+1}/{limit} score={scores[node]:.6f} elapsed={time.perf_counter()-started:.1f}s")
+    else:
+        with Pool(
+            processes=workers,
+            initializer=init_worker,
+            initargs=(neighbors, target_mask, float(cfg["sir_beta"]), float(cfg["sir_gamma"]), runs, t_steps),
+        ) as pool:
+            for finished, (node, score) in enumerate(pool.imap_unordered(score_one_seed, range(limit), chunksize=8), start=1):
+                scores[node] = score
+                if finished % 25 == 0 or finished == limit:
+                    print(f"done={finished}/{limit} latest_node={node+1} score={score:.6f} elapsed={time.perf_counter()-started:.1f}s")
 
     random.setstate(state)
     suffix = f"t{t_steps}_runs{runs}" + ("" if limit == target_count else f"_limit{limit}")

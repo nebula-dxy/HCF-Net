@@ -220,7 +220,7 @@ def ranking_to_pred(dataset: str, ranking):
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run MAHE baseline on prepared heterogeneous datasets")
     parser.add_argument("--datasets", nargs="+", default=["ACM"])
-    parser.add_argument("--epoch", type=int, default=3)
+    parser.add_argument("--epoch", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--relevancy", type=float, default=0.31)
     parser.add_argument("--seed", type=int, default=0)
