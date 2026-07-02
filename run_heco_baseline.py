@@ -305,7 +305,15 @@ def run_dataset(name: str, force_cpu: bool = False) -> Dict[str, float]:
     out_dir = RESULT_ROOT / f"CUSTOM_{name}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    device = torch.device("cuda" if torch.cuda.is_available() and not force_cpu else "cpu")
+    if torch.cuda.is_available() and not force_cpu:
+        try:
+            _ = torch.zeros(1, device="cuda")
+            device = torch.device("cuda")
+        except Exception as exc:
+            print(f"[HeCo/{name}] CUDA unavailable at runtime, falling back to CPU: {exc}")
+            device = torch.device("cpu")
+    else:
+        device = torch.device("cpu")
     print(f"[HeCo/{name}] device={device}")
     feats = [feat.to(device) for feat in feats]
     mps = [to_torch_sparse(normalize_adj(symmetrize_target(mp)), device) for mp in metapaths]

@@ -1,4 +1,5 @@
 import json
+import argparse
 import random
 import time
 from pathlib import Path
@@ -89,32 +90,43 @@ def simulate_target_coverage(neighbors: List[List[Tuple[int, float]]], target_ma
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Build ACM full heterogeneous SIR true scores")
+    parser.add_argument("--runs", type=int, default=8)
+    parser.add_argument("--t-steps", type=int, default=20)
+    parser.add_argument("--limit", type=int, default=0, help="Only compute the first N target nodes for quick validation; 0 means all")
+    args = parser.parse_args()
+
     dataset = "ACM"
-    runs = 8
-    t_steps = 20
+    runs = args.runs
+    t_steps = args.t_steps
     started = time.perf_counter()
     graph, neighbors, target_mask, cfg = build_weighted_full_hetero_graph()
-    scores = np.zeros(int(cfg["target_count"]), dtype=np.float32)
+    target_count = int(cfg["target_count"])
+    limit = target_count if args.limit <= 0 else min(int(args.limit), target_count)
+    scores = np.zeros(limit, dtype=np.float32)
     state = random.getstate()
 
-    for node in range(int(cfg["target_count"])):
+    print(f"start ACM full hetero SIR: target_count={target_count} limit={limit} runs={runs} t_steps={t_steps}")
+    for node in range(limit):
         vals = []
         for run_idx in range(runs):
             random.seed(credible.SEED + run_idx)
             vals.append(simulate_target_coverage(neighbors, target_mask, float(cfg["sir_beta"]), float(cfg["sir_gamma"]), node, t_steps))
         scores[node] = float(np.mean(vals))
-        if node % 200 == 0 or node == int(cfg["target_count"]) - 1:
-            print(f"node={node+1}/{int(cfg['target_count'])} score={scores[node]:.6f} elapsed={time.perf_counter()-started:.1f}s")
+        if node % 50 == 0 or node == limit - 1:
+            print(f"node={node+1}/{limit} score={scores[node]:.6f} elapsed={time.perf_counter()-started:.1f}s")
 
     random.setstate(state)
-    npy_path = OUT_DIR / "ACM_true_sir_full_hetero_target_coverage_t20_runs8.npy"
-    meta_path = OUT_DIR / "ACM_true_sir_full_hetero_target_coverage_t20_runs8_meta.json"
+    suffix = f"t{t_steps}_runs{runs}" + ("" if limit == target_count else f"_limit{limit}")
+    npy_path = OUT_DIR / f"ACM_true_sir_full_hetero_target_coverage_{suffix}.npy"
+    meta_path = OUT_DIR / f"ACM_true_sir_full_hetero_target_coverage_{suffix}_meta.json"
     np.save(npy_path, scores)
     meta = {
         "dataset": dataset,
         "definition": "full heterogeneous graph SIR, coverage counted on target-type nodes only",
         "runs": runs,
         "t_steps": t_steps,
+        "computed_target_count": limit,
         **cfg,
         "min_score": float(scores.min()),
         "max_score": float(scores.max()),

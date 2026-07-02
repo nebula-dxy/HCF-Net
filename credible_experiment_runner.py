@@ -37,7 +37,11 @@ def set_seed(seed: int = SEED) -> None:
 
 def get_device(force_cpu: bool = False) -> torch.device:
     if not force_cpu and torch.cuda.is_available():
-        return torch.device("cuda")
+        try:
+            _ = torch.zeros(1, device="cuda")
+            return torch.device("cuda")
+        except Exception as exc:
+            print(f"[device] CUDA unavailable at runtime, falling back to CPU: {exc}")
     return torch.device("cpu")
 
 

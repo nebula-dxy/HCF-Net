@@ -12,6 +12,7 @@ import numpy as np
 import tensorflow as tf
 import torch
 import experiment_runner as base
+import credible_experiment_runner as credible
 
 ROOT = Path(__file__).resolve().parent
 MAHE_CODE = ROOT / "external" / "MAHE-IM" / "code"
@@ -255,6 +256,9 @@ def main() -> None:
 
         ranking = rank_from_embeddings(workdir, args.relevancy)
         pred = ranking_to_pred(dataset, ranking)
+        art = credible.prepare_dataset(dataset)
+        rows, sir_curves, si_curves = credible.evaluate_methods(art, {"MAHE-IM": pred})
+        row = rows["MAHE-IM"]
         np.save(workdir / f"{dataset.lower()}_mahe_pred.npy", pred)
         with (workdir / "MAHE-IM_seed.txt").open("w", encoding="utf-8") as f:
             f.write("\n".join(ranking))
@@ -262,13 +266,19 @@ def main() -> None:
             import pickle
             pickle.dump(
                 {
-                    "ndcg": np.array([0.0], dtype=np.float32),
-                    "spearman": np.array([0.0], dtype=np.float32),
+                    "ndcg": np.array([float(row["NDCG@100"])], dtype=np.float32),
+                    "spearman": np.array([float(row["Spearman"])], dtype=np.float32),
                     "rmse": np.array([0.0], dtype=np.float32),
                     "args": vars(args),
                 },
                 f,
             )
+        with (workdir / f"{dataset.lower()}_mahe_metrics.json").open("w", encoding="utf-8") as f:
+            json.dump(row, f, indent=2)
+        with (workdir / f"{dataset.lower()}_sir_curve.json").open("w", encoding="utf-8") as f:
+            json.dump(sir_curves["MAHE-IM"], f, indent=2)
+        with (workdir / f"{dataset.lower()}_si_curve.json").open("w", encoding="utf-8") as f:
+            json.dump(si_curves["MAHE-IM"], f, indent=2)
         with (workdir / "summary.json").open("w", encoding="utf-8") as f:
             json.dump(
                 {
@@ -277,6 +287,7 @@ def main() -> None:
                     "spec_limit": args.spec_limit,
                     "epoch": args.epoch,
                     "total_runtime_sec": float(time.perf_counter() - started_at),
+                    "metrics": row,
                 },
                 f,
                 indent=2,
